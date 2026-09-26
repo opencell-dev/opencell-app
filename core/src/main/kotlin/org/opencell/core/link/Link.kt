@@ -1,0 +1,122 @@
+package org.opencell.core.link
+
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import org.opencell.core.protocol.TerminalStatus
+import kotlin.time.ComparableTimeMark
+import kotlin.time.Duration
+
+/**
+ * The seam between the transport (BLE GATT today) and everything above it:
+ * the console, the loopback test and, later, call control and the voice codec.
+ *
+ * It carries opaque payloads of at most [org.opencell.core.protocol.GattContract.MAX_PAYLOAD]
+ * bytes, one per radio frame each way, and nothing else. Upper layers must not
+ * know about GATT.
+ */
+interface TerminalLink {
+    val state: StateFlow<LinkState>
+
+    /** Latest STATUS from the terminal (notification or read), or null before the first one. */
+    val status: StateFlow<TerminalStatus?>
+
+    /** Every DOWN payload, timestamped on arrival. Hot; late subscribers miss earlier payloads. */
+    val downlink: SharedFlow<Downlink>
+
+    /** One write attempt to UP. No retries here: see [UplinkSender]. */
+    suspend fun writeUp(payload: ByteArray): WriteResult
+
+    /** Reads STATUS now. Returns null when not connected or the read failed. */
+    suspend fun refreshStatus(): TerminalStatus?
+}
+
+/** Which terminal to talk to. [address] is the BLE MAC (or a simulator id). */
+data class LinkTarget(val address: String, val name: String?)
+
+sealed interface LinkState {
+    val target: LinkTarget?
+
+    data object Disconnected : LinkState {
+        override val target: LinkTarget? get() = null
+    }
+
+    /** Connecting (including service discovery and enabling notifications). [attempt] counts from 1. */
+    data class Connecting(override val target: LinkTarget, val attempt: Int) : LinkState
+
+    data class Connected(override val target: LinkTarget, val mtu: Int) : LinkState
+
+    /**
+     * The link dropped or a connect failed; the next attempt starts after [delay].
+     * [failures] counts consecutive failures since the last good connection.
+     */
+    data class WaitingToReconnect(
+        override val target: LinkTarget,
+        val failures: Int,
+        val delay: Duration,
+        val reason: String,
+    ) : LinkState
+
+    val isConnected: Boolean get() = this is Connected
+}
+
+/** One DOWN payload. [at] is a monotonic mark for latency; [wallMillis] is for display. */
+class Downlink(val payload: ByteArray, val at: ComparableTimeMark, val wallMillis: Long)
+
+/** Outcome of one write attempt to UP. */
+sealed interface WriteResult {
+    /** The terminal queued the payload for its next UL slot (or a RACH). */
+    data object Accepted : WriteResult
+
+    /** ATT 0x80: no grant yet, UL queue full, a RACH already pending... Retry later. */
+    data object NotNow : WriteResult
+
+    /** ATT 0x0D: longer than the terminal's limit. Permanent. */
+    data object TooLong : WriteResult
+
+    data object NotConnected : WriteResult
+
+    /** Any other GATT failure: [code] is the GATT status or a local error code. */
+    data class Failed(val code: Int, val message: String) : WriteResult
+
+    val label: String
+        get() = when (this) {
+            Accepted -> "accepted"
+            NotNow -> "not now (0x80)"
+            TooLong -> "too long (0x0D)"
+            NotConnected -> "not connected"
+            is Failed -> "failed: $message"
+        }
+}
+
+/**
+ * Receives what a [Connection] produces. Called from transport threads
+ * (Binder threads on Android), so implementations must be thread-safe.
+ */
+interface ConnectionEvents {
+    fun onDownlink(payload: ByteArray)
+    fun onStatus(raw: ByteArray)
+
+    /** The link dropped. Called at most once, and never after [Connection.close]. */
+    fun onClosed(reason: String)
+}
+
+/** One live connection to a terminal, fully set up (services found, notifications on). */
+interface Connection {
+    val mtu: Int
+    suspend fun write(payload: ByteArray): WriteResult
+    suspend fun readStatus(): ByteArray?
+
+    /** Tears the connection down. Idempotent; no [ConnectionEvents.onClosed] follows. */
+    fun close()
+}
+
+/** Opens [Connection]s. Implemented by the Android GATT transport and by the simulator. */
+fun interface Connector {
+    /**
+     * Connects and returns once the link is ready for writes.
+     * Throws on failure (including timeouts); the caller decides whether to retry.
+     */
+    suspend fun connect(target: LinkTarget, events: ConnectionEvents): Connection
+}
+
+class ConnectException(message: String, cause: Throwable? = null) : Exception(message, cause)
