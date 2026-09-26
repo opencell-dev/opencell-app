@@ -35,8 +35,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -55,11 +55,14 @@ fun ConsoleScreen(vm: MainViewModel) {
     val state by vm.linkState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
-    // Follow new entries while the user is at (or near) the bottom.
-    LaunchedEffect(entries.lastOrNull()?.id) {
-        if (entries.isEmpty()) return@LaunchedEffect
-        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (lastVisible < 0 || lastVisible >= entries.size - 3) listState.scrollToItem(entries.lastIndex)
+    // Follow new entries while the list is at its end; stay put if the user scrolled up.
+    // Runs once per new entry: canScrollForward still reflects the layout before it.
+    val lastId = entries.lastOrNull()?.id ?: -1L
+    val followed = remember { LongArray(1) { Long.MIN_VALUE } }
+    if (lastId != followed[0]) {
+        val atEnd = followed[0] == Long.MIN_VALUE || !listState.canScrollForward
+        followed[0] = lastId
+        if (atEnd && entries.isNotEmpty()) listState.requestScrollToItem(entries.lastIndex)
     }
 
     Scaffold(

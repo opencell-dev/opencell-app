@@ -29,6 +29,18 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric UI smoke tests need resources and the merged manifest.
+            isIncludeAndroidResources = true
+            all {
+                // Robolectric pokes FileDescriptor internals on JDK 17+.
+                it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+                it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED")
+            }
+        }
+    }
 }
 
 kotlin {
@@ -60,5 +72,12 @@ dependencies {
     implementation(libs.compose.navigation.suite)
     debugImplementation(libs.compose.ui.tooling)
 
+    debugImplementation(libs.compose.ui.test.manifest)
+
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.junit)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
 }
