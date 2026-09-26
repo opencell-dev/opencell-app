@@ -2,6 +2,7 @@ package org.opencell.core.link
 
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.opencell.core.protocol.GattContract
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
@@ -77,6 +78,16 @@ sealed interface WriteResult {
 
     /** Any other GATT failure: [code] is the GATT status or a local error code. */
     data class Failed(val code: Int, val message: String) : WriteResult
+
+    companion object {
+        /** Maps the GATT status of a write-with-response to a [WriteResult] per the terminal's contract. */
+        fun fromGattStatus(status: Int): WriteResult = when (status) {
+            0 -> Accepted
+            GattContract.ATT_ERR_NOT_NOW -> NotNow
+            GattContract.ATT_ERR_INVALID_LENGTH -> TooLong
+            else -> Failed(status, "GATT status 0x%02X".format(status))
+        }
+    }
 
     val label: String
         get() = when (this) {

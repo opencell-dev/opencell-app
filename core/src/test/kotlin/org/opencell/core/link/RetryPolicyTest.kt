@@ -38,6 +38,14 @@ class RetryPolicyTest {
     }
 
     @Test
+    fun gattStatusMapsToTheContract() {
+        assertEquals(WriteResult.Accepted, WriteResult.fromGattStatus(0))
+        assertEquals(WriteResult.NotNow, WriteResult.fromGattStatus(0x80))
+        assertEquals(WriteResult.TooLong, WriteResult.fromGattStatus(0x0D))
+        assertEquals(WriteResult.Failed(133, "GATT status 0x85"), WriteResult.fromGattStatus(133))
+    }
+
+    @Test
     fun reconnectBackoffDoublesToThirtySeconds() {
         val b = Backoff.RECONNECT
         assertEquals(listOf(1, 2, 4, 8, 16, 30, 30).map { it.seconds }, (1..7).map { b.delayAfter(it) })

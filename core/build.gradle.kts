@@ -31,3 +31,10 @@ tasks.withType<Test>().configureEach {
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
+
+// So `./gradlew testDebugUnitTest` (the Android task name) also runs this module's tests.
+tasks.register("testDebugUnitTest") {
+    group = "verification"
+    description = "Runs the core JVM unit tests (alias of test)."
+    dependsOn(tasks.named("test"))
+}

@@ -41,6 +41,11 @@ class LinkManager(
     private val _status = MutableStateFlow<TerminalStatus?>(null)
     override val status: StateFlow<TerminalStatus?> = _status.asStateFlow()
 
+    private val _statusUpdated = MutableStateFlow(0L)
+
+    /** Wall-clock time of the last STATUS notification or read (0 = never), for "updated at" displays. */
+    val statusUpdatedMillis: StateFlow<Long> = _statusUpdated.asStateFlow()
+
     private val _downlink = MutableSharedFlow<Downlink>(
         extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -89,7 +94,12 @@ class LinkManager(
         } catch (e: Exception) {
             null
         } ?: return null
-        return TerminalStatus.decodeOrNull(raw)?.also { _status.value = it }
+        return TerminalStatus.decodeOrNull(raw)?.also(::publishStatus)
+    }
+
+    private fun publishStatus(s: TerminalStatus) {
+        _status.value = s
+        _statusUpdated.value = wallClock()
     }
 
     private suspend fun run(target: LinkTarget) {
@@ -103,7 +113,7 @@ class LinkManager(
                 }
 
                 override fun onStatus(raw: ByteArray) {
-                    TerminalStatus.decodeOrNull(raw)?.let { _status.value = it }
+                    TerminalStatus.decodeOrNull(raw)?.let(::publishStatus)
                 }
 
                 override fun onClosed(reason: String) {

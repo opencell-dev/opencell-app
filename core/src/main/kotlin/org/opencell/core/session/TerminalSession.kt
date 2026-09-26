@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -58,7 +59,7 @@ class TerminalSession(
             link.downlink.collect { console.add(ConsoleKind.DOWN, "DOWN ${it.payload.size} B", it.payload, it.wallMillis) }
         }
         scope.launch {
-            link.state.collect { console.add(ConsoleKind.INFO, describe(it)) }
+            link.state.drop(1).collect { console.add(ConsoleKind.INFO, describe(it)) }
         }
         scope.launch {
             link.status.map { it?.stateCode }.distinctUntilChanged().collect { code ->
