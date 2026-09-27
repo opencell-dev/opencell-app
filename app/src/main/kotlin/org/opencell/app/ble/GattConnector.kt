@@ -1,6 +1,7 @@
 package org.opencell.app.ble
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -9,9 +10,13 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -35,8 +40,41 @@ private const val TAG = "OpenCellGatt"
  * Opens [GattConnection]s to terminals by MAC address. This is the one place
  * the app connects over GATT: BLE pairing/bonding, if the terminal starts to
  * require it, goes here and in [GattConnection.open].
+ *
+ * It follows the Bluetooth adapter for as long as it lives (the process):
+ * Android cleans up GATT clients without any callback when Bluetooth turns
+ * off, so on TURNING_OFF ([adapterChange]) the live connection is dropped as
+ * if the terminal had disconnected, and [onBluetoothOn] runs once it is back
+ * on, to reconnect without waiting out the backoff.
  */
-class GattConnector(private val context: Context) : Connector {
+class GattConnector(
+    private val context: Context,
+    private val onBluetoothOn: () -> Unit = {},
+) : Connector {
+    /** The connection opened last; dropping one that is already closed does nothing. */
+    private val live = AtomicReference<GattConnection?>(null)
+
+    private val adapterReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            Log.d(TAG, "adapter state $state")
+            when (adapterChange(state)) {
+                AdapterChange.LINK_LOST -> live.get()?.dropped("Bluetooth turned off")
+                AdapterChange.AVAILABLE -> onBluetoothOn()
+                null -> Unit
+            }
+        }
+    }
+
+    init {
+        ContextCompat.registerReceiver(
+            context,
+            adapterReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED, // system broadcasts still arrive
+        )
+    }
+
     override suspend fun connect(target: LinkTarget, events: ConnectionEvents): Connection {
         val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
             ?: throw ConnectException("This phone has no Bluetooth")
@@ -48,6 +86,7 @@ class GattConnector(private val context: Context) : Connector {
             throw ConnectException("Invalid address ${target.address}", e)
         }
         val connection = GattConnection(context, device, events)
+        live.set(connection)
         try {
             connection.open()
             return connection
@@ -203,22 +242,40 @@ internal class GattConnection(
     /** COMMAND is write-with-response only; ATT 0x80, 0x0D and 0x81 come back as [WriteResult]s. */
     override suspend fun writeCommand(payload: ByteArray): WriteResult = writeWithResponse(command, payload)
 
+    /**
+     * A write on a connection that has dropped (or drops during it) is
+     * [WriteResult.NotConnected], like one with no connection at all. So is
+     * a write that can't start because Bluetooth is off or its service
+     * unbound, and that also drops the link: the client is dead.
+     */
     private suspend fun writeWithResponse(c: BluetoothGattCharacteristic, payload: ByteArray): WriteResult {
         var startCode = 0
-        val r = op(Kind.WRITE) { g ->
-            startCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeCharacteristic(c, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            } else {
-                @Suppress("DEPRECATION")
-                c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                @Suppress("DEPRECATION")
-                c.value = payload
-                @Suppress("DEPRECATION")
-                if (g.writeCharacteristic(c)) BluetoothStatusCodes.SUCCESS else LEGACY_START_FAILED
+        val r = try {
+            op(Kind.WRITE) { g ->
+                startCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    g.writeCharacteristic(c, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                } else {
+                    @Suppress("DEPRECATION")
+                    c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    @Suppress("DEPRECATION")
+                    c.value = payload
+                    @Suppress("DEPRECATION")
+                    if (g.writeCharacteristic(c)) BluetoothStatusCodes.SUCCESS else LEGACY_START_FAILED
+                }
+                startCode == BluetoothStatusCodes.SUCCESS
             }
-            startCode == BluetoothStatusCodes.SUCCESS
-        }.takeIf { startCode == BluetoothStatusCodes.SUCCESS }
-            ?: return WriteResult.Failed(startCode, "write not started (${startError(startCode)})")
+        } catch (e: GattException) {
+            if (closed.get()) return WriteResult.NotConnected
+            throw e
+        }
+        when (startCode) {
+            BluetoothStatusCodes.SUCCESS -> Unit
+            in STACK_GONE -> {
+                dropped("Bluetooth is off (${startError(startCode)})")
+                return WriteResult.NotConnected
+            }
+            else -> return WriteResult.Failed(startCode, "write not started (${startError(startCode)})")
+        }
         return when (val result = WriteResult.fromGattStatus(r.status)) {
             is WriteResult.Failed -> WriteResult.Failed(r.status, gattStatusName(r.status))
             else -> result
@@ -305,8 +362,11 @@ internal class GattConnection(
         }
     }
 
-    /** The link went away (or an op hung): release the GATT client and report it once. */
-    private fun dropped(reason: String) {
+    /**
+     * The link went away (or an op hung, or Bluetooth turned off: [GattConnector]
+     * calls this then): release the GATT client and report it once.
+     */
+    fun dropped(reason: String) {
         Log.i(TAG, "dropped: $reason")
         connected.completeExceptionally(GattException(reason))
         if (closed.compareAndSet(false, true)) {
@@ -324,10 +384,17 @@ internal class GattConnection(
         private val OP_TIMEOUT = 5.seconds
         private val MTU_TIMEOUT = 3.seconds
 
+        /** Write start codes meaning the Bluetooth stack no longer serves this client. */
+        private val STACK_GONE = setOf(
+            BluetoothStatusCodes.ERROR_BLUETOOTH_NOT_ENABLED,
+            BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND,
+        )
+
         private fun startError(code: Int) = when (code) {
             BluetoothStatusCodes.ERROR_GATT_WRITE_REQUEST_BUSY -> "busy"
             BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION -> "no permission"
             BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND -> "Bluetooth service not bound"
+            BluetoothStatusCodes.ERROR_BLUETOOTH_NOT_ENABLED -> "Bluetooth not enabled"
             LEGACY_START_FAILED -> "refused"
             else -> "code $code"
         }

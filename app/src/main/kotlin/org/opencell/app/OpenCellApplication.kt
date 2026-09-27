@@ -18,7 +18,9 @@ import org.opencell.core.sim.SimulatedTerminal
 class AppGraph(context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val simulator = SimulatedTerminal(scope)
-    private val gatt = GattConnector(context)
+
+    /** Bluetooth back on: reconnect now rather than at the end of the backoff (up to 30 s). */
+    private val gatt = GattConnector(context) { session.link.retryNow() }
 
     /** The simulated terminal answers at [SimulatedTerminal.ADDRESS]; everything else is BLE. */
     private val connector = Connector { target, events ->
@@ -26,7 +28,7 @@ class AppGraph(context: Context) {
     }
 
     private val prefs = context.getSharedPreferences("opencell", Context.MODE_PRIVATE)
-    val session = TerminalSession(connector, scope, phoneMemory = PrefsPhoneMemory(prefs))
+    val session: TerminalSession = TerminalSession(connector, scope, phoneMemory = PrefsPhoneMemory(prefs))
     val repository = TerminalRepository(
         context = context,
         session = session,

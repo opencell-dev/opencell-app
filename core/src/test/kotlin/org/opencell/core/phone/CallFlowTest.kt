@@ -9,6 +9,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.opencell.core.link.ConnectException
+import org.opencell.core.link.Connector
+import org.opencell.core.link.LinkState
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.EndCause
@@ -195,6 +198,41 @@ class CallFlowTest {
         advanceTimeBy(1_000)
         assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
         assertEquals(1L, b.state.call?.id)
+    }
+
+    /**
+     * Bluetooth turned off while ringing: the transport reports the link closed (as the GATT
+     * connector does on the adapter's TURNING_OFF), so the link-loss path runs (linkUp false: the
+     * ring stops) and reconnects fail until it's back; Bluetooth on retries at once, and the
+     * still-ringing call comes back from STATUS as an unknown caller.
+     */
+    @Test
+    fun bluetoothOffWhileRingingStopsTheRingAndBluetoothOnRingsAgain() = runTest {
+        val sim = SimulatedTerminal(backgroundScope, activatedNumber = me)
+        var bluetoothOn = true
+        val connector = Connector { target, events ->
+            if (!bluetoothOn) throw ConnectException("Bluetooth is off")
+            sim.connect(target, events)
+        }
+        val b = Bench(sim, TerminalSession(connector, backgroundScope, testScheduler.timeSource, { testScheduler.currentTime }))
+        connect(b)
+        assertTrue(sim.incomingCall(peer))
+        advanceTimeBy(100)
+        assertEquals(CallPhase.INCOMING, b.state.call?.phase)
+        assertEquals(peer, b.state.call?.peer)
+
+        bluetoothOn = false
+        sim.dropLink()
+        advanceTimeBy(20_000) // retrying all along, backing off
+        assertFalse(b.state.linkUp)
+        assertEquals(CallPhase.INCOMING, b.state.call?.phase) // the call goes on in the terminal
+        assertTrue(b.session.link.state.value is LinkState.WaitingToReconnect)
+
+        bluetoothOn = true
+        b.session.link.retryNow()
+        advanceTimeBy(1_000) // connect 0.4 s, no backoff wait
+        assertTrue(b.state.linkUp)
+        assertEquals(Call(null, Direction.INCOMING, null, CallPhase.INCOMING), b.state.call)
     }
 
     @Test

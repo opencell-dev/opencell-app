@@ -56,6 +56,7 @@ phone state, call-flow, link and loopback tests, and the Robolectric UI tests in
 The app also declares these, and they need no prompt:
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE`: keep the link up with the screen off.
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: open the system battery dialog.
+- `VIBRATE`: vibrate for an incoming call.
 
 QR scanning uses CameraX and ZXing: it works offline and without Google Play Services.
 
@@ -80,7 +81,8 @@ also do all of the following:
   the suffix is the TMID. A terminal stops advertising while a phone is
   connected (it takes one connection: stop `tools/ble/oc_ble.py` first). Tap one to
   connect; the app reconnects by itself (1 s, 2 s, 4 s … 30 s) until you tap
-  **Disconnect**, here or in the notification.
+  **Disconnect**, here or in the notification. Turning Bluetooth off counts
+  as losing the link; turning it back on reconnects at once.
 - **Demo terminal** is a simulated terminal and network, for trying everything
   without hardware. It offers **Use a demo code** for activation, its test peer
   (**Test peer**, +883 606 555 0100) answers after 3 s, calling your own number

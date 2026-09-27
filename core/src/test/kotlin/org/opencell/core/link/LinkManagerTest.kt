@@ -82,6 +82,42 @@ class LinkManagerTest {
         assertEquals(1.seconds, (m.state.value as LinkState.WaitingToReconnect).delay)
     }
 
+    /** Bluetooth back on: the wait is cut short and the backoff starts over. */
+    @Test
+    fun retryNowCutsTheWaitShortAndRestartsTheBackoff() = runTest {
+        val connector = FakeConnector().apply { failNext = 5 } // Bluetooth is off
+        val m = manager(connector)
+        m.connect(target)
+        advanceTimeBy(101 + 1100 + 2100 + 4100) // four failed attempts; now waiting 8 s
+        assertEquals(8.seconds, (m.state.value as LinkState.WaitingToReconnect).delay)
+        assertEquals(4, connector.attempts)
+
+        m.retryNow()
+        runCurrent()
+        assertEquals(LinkState.Connecting(target, 1), m.state.value)
+        advanceTimeBy(101) // still off: the backoff starts over at 1 s
+        assertEquals(1.seconds, (m.state.value as LinkState.WaitingToReconnect).delay)
+
+        connector.failNext = 0
+        m.retryNow()
+        advanceTimeBy(101)
+        assertTrue(m.state.value.isConnected)
+        assertEquals(6, connector.attempts)
+    }
+
+    @Test
+    fun retryNowWhileConnectedDoesNotShortenALaterWait() = runTest {
+        val connector = FakeConnector()
+        val m = manager(connector)
+        m.connect(target)
+        advanceTimeBy(101)
+        m.retryNow()
+        connector.connections.single().drop()
+        advanceTimeBy(900)
+        assertEquals(1.seconds, (m.state.value as LinkState.WaitingToReconnect).delay)
+        assertEquals(1, connector.attempts)
+    }
+
     @Test
     fun disconnectStopsReconnecting() = runTest {
         val connector = FakeConnector()

@@ -7,7 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -18,6 +18,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.TimeSource
@@ -25,7 +26,8 @@ import kotlin.time.TimeSource
 /**
  * Keeps one terminal connected: connects through a [Connector], forwards
  * DOWN/STATUS, and reconnects with [reconnect] backoff whenever the link drops
- * or a connect fails, until [disconnect] is called.
+ * or a connect fails, until [disconnect] is called. [retryNow] cuts a wait
+ * short when the transport comes back (Bluetooth turned on again).
  *
  * Pure Kotlin, so the reconnect logic is unit-tested with a fake [Connector].
  */
@@ -62,6 +64,9 @@ class LinkManager(
     private val control = Mutex()
     private var job: Job? = null
 
+    /** [retryNow]'s wake-up for the reconnect wait; at most one pending. */
+    private val wake = Channel<Unit>(Channel.CONFLATED)
+
     @Volatile
     private var connection: Connection? = null
 
@@ -72,7 +77,18 @@ class LinkManager(
     suspend fun connect(target: LinkTarget) = control.withLock {
         job?.cancelAndJoin()
         _status.value = null
+        wake.tryReceive()
         job = scope.launch { run(target) }
+    }
+
+    /**
+     * The transport can connect again (Bluetooth came back on): ends the
+     * current reconnect wait now, or the next one if an attempt is under
+     * way, and starts the backoff over. One that comes while connected is
+     * dropped when that connection ends. No effect after [disconnect].
+     */
+    fun retryNow() {
+        wake.trySend(Unit)
     }
 
     suspend fun disconnect() = control.withLock {
@@ -152,6 +168,7 @@ class LinkManager(
                 } finally {
                     connection = null
                     c.close()
+                    wake.tryReceive() // one from while it was up is moot
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -161,7 +178,7 @@ class LinkManager(
             failures++
             val wait = reconnect.delayAfter(failures)
             _state.value = LinkState.WaitingToReconnect(target, failures, wait, reason)
-            delay(wait)
+            if (withTimeoutOrNull(wait) { wake.receive() } != null) failures = 0
         }
     }
 }
