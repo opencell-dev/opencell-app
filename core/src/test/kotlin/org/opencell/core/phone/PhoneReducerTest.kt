@@ -11,8 +11,8 @@ import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalEvent
 
 class PhoneReducerTest {
-    private val me = "+8836065551234"
-    private val peer = "+8836065550100"
+    private val me = "+883160655501234"
+    private val peer = "+883160655500100"
     private val registered = PhoneState(linkUp = true, sig = SigState.REGISTERED, number = me, mode = RegMode.PART15)
 
     /** Applies inputs in order; the n-th input happens at [t0] + n * [step] ms. */
@@ -39,7 +39,7 @@ class PhoneReducerTest {
 
     @Test
     fun failedActivationOfAnActivatedTerminalKeepsItsNumber() {
-        val s = run(registered, PhoneInput.Activating("+8836065559999"), ev(TerminalEvent.ActivationFailed(2)))
+        val s = run(registered, PhoneInput.Activating("+883160655509999"), ev(TerminalEvent.ActivationFailed(2)))
         assertEquals(Activation.Failed(2), s.activation)
         assertEquals("This code has already been used (token used)", (s.activation as Activation.Failed).text)
         assertEquals(me, s.number)
@@ -172,6 +172,13 @@ class PhoneReducerTest {
         assertEquals(PhoneState(linkUp = true, sig = SigState.NOT_ACTIVATED), s)
     }
 
+    /** Numbering v2 §6.3: an event from pre-v2 firmware is explained, and changes nothing else. */
+    @Test
+    fun oldFirmwareEventIsExplainedNotApplied() {
+        val s = run(registered, ev(TerminalEvent.OldFirmware(TerminalEvent.REGISTERED, "03 88 36 06 55 51 23 4f 01")))
+        assertEquals(registered.copy(notice = "Terminal firmware uses old numbers: update it"), s)
+    }
+
     @Test
     fun lateEndedForAnEarlierCallIsIgnored() {
         val s = run(registered, ev(TerminalEvent.Incoming(5, peer)), ev(TerminalEvent.Ended(4, 0)))
@@ -269,7 +276,7 @@ class PhoneReducerTest {
     /** Triage: re-activating an activated terminal: DIAL would be refused (0x80) until it's done. */
     @Test
     fun activatingSetsTheSignallingStateSoDialIsNotOffered() {
-        val s = run(registered, PhoneInput.Activating("+8836065559999"))
+        val s = run(registered, PhoneInput.Activating("+883160655509999"))
         assertEquals(SigState.ACTIVATING, s.sig)
         assertFalse(s.canDial)
     }
@@ -308,7 +315,7 @@ class PhoneReducerTest {
 
     @Test
     fun actFailedTokenUsedThenRegisteredKeepsTheFailureShown() {
-        val s = run(registered, PhoneInput.Activating("+8836065559999"), ev(TerminalEvent.ActivationFailed(2)), ev(TerminalEvent.Registered(me, 1)))
+        val s = run(registered, PhoneInput.Activating("+883160655509999"), ev(TerminalEvent.ActivationFailed(2)), ev(TerminalEvent.Registered(me, 1)))
         assertEquals(Activation.Failed(2), s.activation)
         assertEquals(SigState.REGISTERED, s.sig)
         assertEquals(me, s.number)

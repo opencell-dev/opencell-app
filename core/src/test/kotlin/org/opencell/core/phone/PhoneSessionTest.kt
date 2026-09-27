@@ -25,8 +25,8 @@ import org.opencell.core.session.ConsoleKind
 import kotlin.time.Duration.Companion.milliseconds
 
 class PhoneSessionTest {
-    private val me = "+8836065551234"
-    private val peer = "+8836065550100"
+    private val me = "+883160655501234"
+    private val peer = "+883160655500100"
     private val address = "AA:BB"
 
     private fun status(sig: SigState) = TerminalStatus(4, 0, 2, -52, 50, 0x76AD0488, 1000, 7, sig.code)
@@ -64,9 +64,9 @@ class PhoneSessionTest {
         assertEquals(PhoneSession.BAD_NUMBER, h.phone.dial("+49 176 1234"))
         runCurrent()
         assertTrue(h.link.commands.isEmpty())
-        assertNull(h.phone.dial("+883 606 555 0100"))
+        assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
-        assertEquals("02 2b 38 38 33 36 30 36 35 35 35 30 31 30 30", hex(h.link.commands.single()))
+        assertEquals("02 2b 38 38 33 31 36 30 36 35 35 35 30 30 31 30 30", hex(h.link.commands.single()))
         assertEquals(Call(null, Direction.OUTGOING, peer, CallPhase.CALLING), h.phone.state.value.call)
         assertTrue(h.log.contains("INFO COMMAND DIAL $peer: accepted"))
     }
@@ -90,7 +90,7 @@ class PhoneSessionTest {
         h.link.emitEvent(TerminalEvent.Ended(7, 0))
         runCurrent()
         assertEquals(CallPhase.ENDED, h.phone.state.value.call?.phase)
-        assertTrue(h.log.contains("INFO EVENT incoming call 7 from +883 606 555 0100"))
+        assertTrue(h.log.contains("INFO EVENT incoming call 7 from +883-1-606-555-00100"))
         h.phone.dismissCall()
         assertNull(h.phone.state.value.call)
     }
@@ -150,7 +150,7 @@ class PhoneSessionTest {
         h.link.commandResults += WriteResult.BadArgument
         h.phone.activate(qr)
         runCurrent()
-        assertEquals(108, h.link.commands.single().size)
+        assertEquals(1 + 111, h.link.commands.single().size) // op + the 111-character v2 code
         assertEquals("The terminal refused this activation code (damaged, or an invalid network key)", h.phone.state.value.notice)
         assertEquals(Activation.Idle, h.phone.state.value.activation)
     }
@@ -252,7 +252,7 @@ class PhoneSessionTest {
     @Test
     fun aStatusHeldBackByTheGraceEndsTheCallOnceItElapsesWithNoFurtherInput() = runTest {
         val h = harness()
-        assertNull(h.phone.dial("+883 606 555 0100"))
+        assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
         assertEquals(CallPhase.CALLING, h.phone.state.value.call?.phase)
         // A STATUS(REGISTERED) arrives inside the grace: it disagrees with the
@@ -275,7 +275,7 @@ class PhoneSessionTest {
     @Test
     fun aStaleStatusAfterDialIsCheckedWithAFreshReadBeforeTheCallIsEnded() = runTest {
         val h = harness()
-        assertNull(h.phone.dial("+883 606 555 0100"))
+        assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
         h.link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001)) // stale: read before DIAL was taken
         h.link.refreshOverride = status(SigState.CALLING) // what the terminal really says now
@@ -292,7 +292,7 @@ class PhoneSessionTest {
     @Test
     fun whenTheFreshReadFailsTheHeldStatusStillEndsTheCall() = runTest {
         val h = harness()
-        assertNull(h.phone.dial("+883 606 555 0100"))
+        assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
         h.link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001))
         h.link.refreshFails = true
@@ -314,7 +314,7 @@ class PhoneSessionTest {
             monotonic = { testScheduler.currentTime },
         )
         runCurrent()
-        assertNull(phone.dial("+883 606 555 0100"))
+        assertNull(phone.dial("+883 1 606 555 0100"))
         runCurrent()
         wallOffset = -3_600_000L // NTP steps the wall clock back an hour
         link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001))
@@ -477,6 +477,6 @@ class PhoneSessionTest {
     }
 
     private companion object {
-        const val GOLDEN = "opencell:1:AQEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyCgoaKjpKWmp7CxsrO0tba3uLm6u7y9vr-INgZVUSNPeFY0EoZ3"
+        const val GOLDEN = "opencell:2:AgEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyCgoaKjpKWmp7CxsrO0tba3uLm6u7y9vr-IMWBlVQEjT3hWNBIAAD44"
     }
 }

@@ -253,7 +253,7 @@ private fun Onboarding(vm: MainViewModel, again: Boolean) {
             value = vm.codeInput,
             onValueChange = { vm.codeInput = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Activation code (opencell:1:…)") },
+            label = { Text("Activation code (opencell:2:…)") },
             textStyle = MonoStyle,
             isError = vm.codeError != null,
             supportingText = { vm.codeError?.let { Text(it) } },

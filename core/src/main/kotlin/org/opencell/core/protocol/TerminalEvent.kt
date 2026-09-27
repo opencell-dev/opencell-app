@@ -52,10 +52,11 @@ enum class RegMode(val code: Int, val label: String, val description: String) {
 }
 
 /**
- * EVENT notifications (`ev (1) || args`, contract v2). Numbers are 7 BCD
- * bytes and call ids 4 bytes big-endian. Raw codes are kept so a reason this
- * app doesn't know still displays. The terminal does not queue events while
- * no phone is connected: after a (re)connect the app reads STATUS byte 3.
+ * EVENT notifications (`ev (1) || args`, contract v3). Numbers are 8 BCD
+ * bytes (numbering v2) and call ids 4 bytes big-endian. Raw codes are kept so
+ * a reason this app doesn't know still displays. The terminal does not queue
+ * events while no phone is connected: after a (re)connect the app reads
+ * STATUS byte 3.
  */
 sealed interface TerminalEvent {
     val code: Int
@@ -114,6 +115,17 @@ sealed interface TerminalEvent {
         override fun encode() = byteArrayOf(code.toByte()) + u32(callId) + causeCode.toByte()
     }
 
+    /**
+     * ACTIVATED, REGISTERED or INCOMING at its contract-v2 length (7-byte
+     * numbers): the terminal runs firmware from before numbering v2. Shown,
+     * never read as a v3 event (v2's REGISTERED mode byte would land inside
+     * a v3 number).
+     */
+    data class OldFirmware(override val code: Int, val hex: String) : TerminalEvent {
+        override val label get() = "$OLD_FIRMWARE_TEXT (event $hex)"
+        override fun encode() = (Hex.parse(hex) as Hex.Parse.Ok).bytes
+    }
+
     data object Deactivated : TerminalEvent {
         override val code get() = DEACTIVATED
         override val label get() = "deactivated"
@@ -137,18 +149,41 @@ sealed interface TerminalEvent {
         const val ENDED = 0x08
         const val DEACTIVATED = 0x09
 
-        /** Decodes one EVENT value. Extra trailing bytes are ignored (a newer firmware may add fields). */
+        const val OLD_FIRMWARE_TEXT = "Terminal firmware uses old numbers: update it"
+
+        private const val N = PhoneNumber.BCD_LEN
+        private const val OLD_N = PhoneNumber.OLD_BCD_LEN
+
+        /**
+         * Decodes one EVENT value. ACTIVATED, REGISTERED and INCOMING must have
+         * their exact v3 length (9, 10 and 13 bytes): that is how the app tells
+         * v3 firmware from v2 ([OldFirmware]). Other events ignore extra
+         * trailing bytes (a newer firmware may add fields).
+         */
         fun decode(raw: ByteArray): TerminalEvent {
             val unknown = Unknown(Hex.format(raw), raw.firstOrNull()?.toInt()?.and(0xFF) ?: -1)
             if (raw.isEmpty()) return unknown
             val n = raw.size - 1
             fun u8(i: Int) = raw[i].toInt() and 0xFF
+            val old = OldFirmware(u8(0), Hex.format(raw))
             return when (u8(0)) {
-                ACTIVATED -> if (n >= 7) Activated(PhoneNumber.fromBcd(raw, 1)) else unknown
+                ACTIVATED -> when (n) {
+                    N -> Activated(PhoneNumber.fromBcd(raw, 1))
+                    OLD_N -> old
+                    else -> unknown
+                }
                 ACT_FAILED -> if (n >= 1) ActivationFailed(u8(1)) else unknown
-                REGISTERED -> if (n >= 8) Registered(PhoneNumber.fromBcd(raw, 1), u8(8)) else unknown
+                REGISTERED -> when (n) {
+                    N + 1 -> Registered(PhoneNumber.fromBcd(raw, 1), u8(1 + N))
+                    OLD_N + 1 -> old
+                    else -> unknown
+                }
                 REG_FAILED -> if (n >= 1) RegistrationFailed(u8(1)) else unknown
-                INCOMING -> if (n >= 11) Incoming(u32(raw, 1), PhoneNumber.fromBcd(raw, 5)) else unknown
+                INCOMING -> when (n) {
+                    4 + N -> Incoming(u32(raw, 1), PhoneNumber.fromBcd(raw, 5))
+                    4 + OLD_N -> old
+                    else -> unknown
+                }
                 RINGING -> if (n >= 4) Ringing(u32(raw, 1)) else unknown
                 CONNECTED -> if (n >= 5) Connected(u32(raw, 1), u8(5)) else unknown
                 ENDED -> if (n >= 5) Ended(u32(raw, 1), u8(5)) else unknown

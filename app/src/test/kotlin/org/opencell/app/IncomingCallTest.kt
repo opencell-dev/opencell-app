@@ -65,12 +65,12 @@ class IncomingCallTest {
     @Test
     fun notificationIsSilentFullScreenAndCancels() {
         val notifier = CallNotifier(app)
-        notifier.showIncoming(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        notifier.showIncoming(Call(1, Direction.INCOMING, "+883160655500100", CallPhase.INCOMING))
         val posted = shadowOf(nm).allNotifications.single()
         assertEquals(Notification.CATEGORY_CALL, posted.category)
         assertNotNull(posted.fullScreenIntent)
         // CallStyle titles the notification with the caller.
-        assertEquals("+883 606 555 0100", posted.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals("+883-1-606-555-00100", posted.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
         assertEquals(CallNotifier.CHANNEL_ID, posted.channelId)
         val channel = nm.getNotificationChannel(CallNotifier.CHANNEL_ID)
         assertEquals(NotificationManager.IMPORTANCE_HIGH, channel.importance)
@@ -90,7 +90,7 @@ class IncomingCallTest {
         // but no call screen appears. The channel already carries no sound or vibration, and
         // setOnlyAlertOnce keeps a later update quiet, so the notification itself must not
         // silence or group itself.
-        val posted = CallNotifier(app).build(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        val posted = CallNotifier(app).build(Call(1, Direction.INCOMING, "+883160655500100", CallPhase.INCOMING))
         assertNull("no implicit group key", posted.group)
         assertEquals(Notification.GROUP_ALERT_ALL, posted.groupAlertBehavior)
         assertNotNull(posted.fullScreenIntent)
@@ -120,7 +120,7 @@ class IncomingCallTest {
 
     @Test
     fun answerAndRejectActionsTargetTheRightComponentsAndActions() {
-        val n = CallNotifier(app).build(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        val n = CallNotifier(app).build(Call(1, Direction.INCOMING, "+883160655500100", CallPhase.INCOMING))
         val rejectAction = n.actions.first { shadowOf(it.actionIntent).savedIntent.action == CallActionReceiver.ACTION_REJECT }
         val rejectIntent = shadowOf(rejectAction.actionIntent).savedIntent
         assertEquals(CallActionReceiver::class.java.name, rejectIntent.component?.className)
@@ -159,7 +159,7 @@ class IncomingCallTest {
     @Test
     fun rejectReceiverDoesNotCancelTheNotificationItself() {
         val notifier = CallNotifier(app)
-        notifier.showIncoming(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        notifier.showIncoming(Call(1, Direction.INCOMING, "+883160655500100", CallPhase.INCOMING))
         CallActionReceiver().onReceive(app, Intent(CallActionReceiver.ACTION_REJECT))
         assertEquals(1, shadowOf(nm).allNotifications.size)
         notifier.cancel()

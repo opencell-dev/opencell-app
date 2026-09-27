@@ -93,7 +93,7 @@ class CallFlowTest {
         val b = bench(activated = true)
         connect(b)
         assertEquals(SigState.REGISTERED, b.state.sig)
-        assertNull(b.phone.dial("+883 606 555 0100"))
+        assertNull(b.phone.dial("606-555-0100"))
         advanceTimeBy(1_000)
         assertEquals(CallPhase.RINGING, b.state.call?.phase)
         assertEquals(peer, b.state.call?.peer)

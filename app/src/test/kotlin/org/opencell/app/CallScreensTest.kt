@@ -34,10 +34,10 @@ class CallScreensTest {
     fun outgoingCallRingsConnectsCarriesDataAndHangsUp() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        compose.onNodeWithText("Number (+883…)").performTextReplacement("+883 606 555 0100")
+        compose.onNodeWithText("Number (+883…)").performTextReplacement("+883 1 606 555 0100")
         compose.onNodeWithText("Call").performClick()
         compose.waitForText("Outgoing call")
-        compose.onNodeWithText("+883 606 555 0100").assertExists()
+        compose.onNodeWithText("+883-1-606-555-00100").assertExists()
         compose.waitForText("Ringing…")
         compose.waitForText("Connected")
         compose.onNodeWithText("Send 5 test frames").performClick()
@@ -61,9 +61,9 @@ class CallScreensTest {
     fun incomingCallIsAnsweredAndEndedByTheFarEnd() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        assertTrue(sim.incomingCall("+8836065550100"))
+        assertTrue(sim.incomingCall("+883160655500100"))
         compose.waitForText("Incoming call")
-        compose.onNodeWithText("+883 606 555 0100").assertExists()
+        compose.onNodeWithText("+883-1-606-555-00100").assertExists()
         compose.onNodeWithText("Answer").performClick()
         compose.waitForText("Since ")
         assertTrue(sim.peerHangup())
@@ -74,7 +74,7 @@ class CallScreensTest {
     fun incomingCallIsRejected() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        sim.incomingCall("+8836065550100")
+        sim.incomingCall("+883160655500100")
         compose.waitForText("Incoming call")
         compose.onNodeWithText("Reject").performClick()
         compose.waitForText("Call rejected")
@@ -88,7 +88,7 @@ class CallScreensTest {
     fun callScreenOffersCloseWhileTheLinkIsDown() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        assertTrue(sim.incomingCall("+8836065550100"))
+        assertTrue(sim.incomingCall("+883160655500100"))
         compose.waitForText("Incoming call")
         sim.dropLink()
         compose.waitForText("The phone lost the terminal")
@@ -104,7 +104,7 @@ class CallScreensTest {
     fun callScreenSaysTheTerminalNeedsPairingAgainAfterAPairingFailure() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        assertTrue(sim.incomingCall("+8836065550100"))
+        assertTrue(sim.incomingCall("+883160655500100"))
         compose.waitForText("Incoming call")
         sim.failNextConnect = PairingProblem.FAILED
         sim.dropLink()
@@ -121,7 +121,7 @@ class CallScreensTest {
     fun disconnectingDuringACallEndsItAndCloseLeavesTheCallScreen() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        assertTrue(sim.incomingCall("+8836065550100"))
+        assertTrue(sim.incomingCall("+883160655500100"))
         compose.waitForText("Incoming call")
         compose.activity.graph.repository.disconnect()
         compose.waitForText("Call ended (the phone was disconnected from the terminal)")

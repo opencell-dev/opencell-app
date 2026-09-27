@@ -1,7 +1,7 @@
 package org.opencell.core.protocol
 
 /**
- * COMMAND writes (`op (1) || args`, contract v2). The terminal answers each
+ * COMMAND writes (`op (1) || args`, contract v3). The terminal answers each
  * write with success or an ATT error: 0x80 not in the right state, 0x0D bad
  * length, 0x81 malformed argument. Commands are never retried automatically:
  * 0x80 means the state is wrong, and the app resyncs from STATUS instead.
@@ -18,7 +18,11 @@ sealed interface Command {
         override fun encode() = byteArrayOf(op.toByte()) + qrText.trim().toByteArray(Charsets.US_ASCII)
     }
 
-    /** DIAL with the number in ASCII, `+883…` as [PhoneNumber.parse] returns it. */
+    /**
+     * DIAL with the number in ASCII (at most [GattContract.DIAL_MAX] bytes): the
+     * full form `+883…` from [PhoneNumber.normalize], or national digits the
+     * terminal completes from its own number ([DialCheck.National]).
+     */
     data class Dial(val number: String) : Command {
         override val op get() = DIAL
         override val label get() = "DIAL $number"

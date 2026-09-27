@@ -3,9 +3,10 @@ package org.opencell.core.protocol
 import java.util.UUID
 
 /**
- * The terminal's BLE GATT contract v2, mirrored from
+ * The terminal's BLE GATT contract v3 (v2 with numbering-v2 numbers: 8 BCD
+ * bytes in EVENTs, any dialled form in DIAL), mirrored from
  * `firmware/components/lc_term/include/lc_term_gatt.h` and the constants in
- * `firmware/components/lc_sig/include/lc_sig.h` (branch `lc-sig`).
+ * `firmware/components/lc_sig/include/lc_sig.h` (branch `numbers-v2`).
  *
  * Keep this file in sync with those headers: it is the only place the app
  * hard-codes UUIDs, sizes and ATT error codes.
@@ -46,6 +47,9 @@ object GattContract {
 
     /** Longest QR text ACTIVATE takes. */
     const val QR_TEXT_MAX = 120
+
+    /** `LC_SIG_DIAL_MAX`: longest DIAL argument. */
+    const val DIAL_MAX = 24
 
     /** `LC_GATT_EVENT_MAX`. */
     const val EVENT_MAX = 16

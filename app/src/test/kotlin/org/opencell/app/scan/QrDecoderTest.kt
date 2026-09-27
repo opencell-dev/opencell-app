@@ -11,8 +11,8 @@ import kotlin.random.Random
 
 /** Plain JVM (no Robolectric): renders a QR code like `lcbench mkqr` prints and reads it back. */
 class QrDecoderTest {
-    private val golden = "opencell:1:AQEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyCgoaKjpKWmp7CxsrO0tba3uLm6u7y9vr-" +
-        "INgZVUSNPeFY0EoZ3"
+    private val golden = "opencell:2:AgEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyCgoaKjpKWmp7CxsrO0tba3uLm6u7y9vr-" +
+        "IMWBlVQEjT3hWNBIAAD44"
 
     /** A camera-like frame: the code drawn [scale] px per module on a grey background, rows [stride] apart. */
     private fun frame(text: String, scale: Int, stride: Int, width: Int, height: Int): ByteArray {

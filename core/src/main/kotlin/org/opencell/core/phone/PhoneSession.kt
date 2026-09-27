@@ -159,7 +159,7 @@ class PhoneSession(
 
     /** Sends DIAL. Returns why [input] isn't a number the terminal takes, or null once the command is on its way. */
     fun dial(input: String): String? {
-        val number = PhoneNumber.parse(input) ?: return BAD_NUMBER
+        val number = PhoneNumber.normalize(input, _state.value.number) ?: return BAD_NUMBER
         command(Command.Dial(number)) { apply(PhoneInput.Dialled(number)) }
         return null
     }

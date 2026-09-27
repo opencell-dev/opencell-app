@@ -17,6 +17,7 @@ import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.GattContract
+import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.protocol.RegFailReason
 import org.opencell.core.protocol.RegMode
@@ -52,7 +53,7 @@ data class SimTiming(
 /**
  * A software terminal plus network, for trying the app without hardware
  * ("Demo terminal") and for tests. As far as the phone can tell it behaves like
- * the firmware (contract v2) against `lcbench net`:
+ * the firmware (contract v3, numbering v2) against `lcbench net`:
  * - the radio walks SEARCH -> SYNCED -> ATTACHING -> GRANTED over ~2 s of frames
  *   and then stays granted;
  * - UP takes app data frames into a 4-deep queue (0x80 when full or not granted,
@@ -65,7 +66,9 @@ data class SimTiming(
  *   call timer, and not periodically;
  * - activation accepts any valid code whose token wasn't used here and hasn't
  *   expired; outgoing calls ring and are answered after [SimTiming.peerAnswers];
- *   dialling your own number is busy, [UNREACHABLE] is unreachable;
+ *   DIAL takes any dialled form and completes it from the terminal's own
+ *   number (`lc_sig_number_normalize`); dialling your own number is busy,
+ *   [UNREACHABLE] is unreachable;
  * - EVENTs are dropped while no phone is connected, like the firmware's.
  *
  * Signalling state lives here, not in the connection, so a test can drop the
@@ -306,11 +309,10 @@ class SimulatedTerminal(
                 later(timing.activation) { finishActivation(qr) }
             }
             Command.DIAL -> {
-                if (a.isEmpty() || a.size > 16) return WriteResult.TooLong
+                if (a.isEmpty() || a.size > GattContract.DIAL_MAX) return WriteResult.TooLong
                 if (sig != SigState.REGISTERED) return WriteResult.NotNow
-                val text = a.decodeToString()
-                if (!STRICT_NUMBER.matches(text)) return WriteResult.BadArgument
-                startOutgoing(if (text.startsWith("+")) text else "+$text")
+                val called = PhoneNumber.normalize(a.decodeToString(), number) ?: return WriteResult.BadArgument
+                startOutgoing(called)
             }
             Command.ANSWER -> {
                 if (a.isNotEmpty()) return WriteResult.TooLong
@@ -470,14 +472,12 @@ class SimulatedTerminal(
         const val ADDRESS = "SIMULATED"
 
         /** The number the demo code activates. */
-        const val DEMO_NUMBER = "+8836065551234"
+        const val DEMO_NUMBER = "+883160655501234"
 
-        /** A peer that answers, like `lcbench net`'s simulated peer. */
-        const val PEER = "+8836065550100"
+        /** A peer that answers, like `lcbench net`'s simulated peer: the echo service, 00100. */
+        const val PEER = "+883160655500100"
 
         /** Calls to this number end "unreachable". */
-        const val UNREACHABLE = "+8836065559999"
-
-        private val STRICT_NUMBER = Regex("\\+?883[0-9]{10}")
+        const val UNREACHABLE = "+883160655509999"
     }
 }

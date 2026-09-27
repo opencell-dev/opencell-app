@@ -41,7 +41,7 @@ class PhoneFlowTest {
     }
 
     private fun activateWith(code: String) {
-        compose.onNodeWithText("Activation code (opencell:1:…)").performTextReplacement(code)
+        compose.onNodeWithText("Activation code (opencell:2:…)").performTextReplacement(code)
         compose.onNodeWithText("Check code").performClick()
         compose.waitForText("Valid until")
         compose.onNodeWithText("Activate").performClick()
@@ -67,10 +67,10 @@ class PhoneFlowTest {
         compose.onNodeWithText("Scan QR code").assertExists()
         compose.onNodeWithText("Use a demo code").performClick()
         compose.waitForText("Valid until")
-        compose.onNodeWithText("+883 606 555 1234").assertExists()
+        compose.onNodeWithText("+883-1-606-555-01234").assertExists()
         compose.onNodeWithText("Activate").performClick()
         compose.waitForText("Your number")
-        compose.onNodeWithText("+883 606 555 1234").assertExists()
+        compose.onNodeWithText("+883-1-606-555-01234").assertExists()
         compose.onNodeWithText("Registered").assertExists()
         compose.onNodeWithText("Part 15 · Signalling and voice encrypted", substring = true).assertExists()
     }
@@ -78,9 +78,9 @@ class PhoneFlowTest {
     @Test
     fun badCodeIsExplainedBeforeAnythingIsSent() {
         compose.connectDemoAndOpenPhone()
-        compose.onNodeWithText("Activation code (opencell:1:…)").performTextReplacement("opencell:1:nope")
+        compose.onNodeWithText("Activation code (opencell:2:…)").performTextReplacement("opencell:2:nope")
         compose.onNodeWithText("Check code").performClick()
-        compose.waitForText("Incomplete code: expected 96 characters after opencell:1:, found 4")
+        compose.waitForText("Incomplete code: expected 100 characters after opencell:2:, found 4")
     }
 
     @Test

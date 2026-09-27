@@ -282,6 +282,7 @@ object PhoneReducer {
             }
         }
         TerminalEvent.Deactivated -> PhoneState(linkUp = s.linkUp, sig = SigState.NOT_ACTIVATED)
+        is TerminalEvent.OldFirmware -> s.copy(notice = TerminalEvent.OLD_FIRMWARE_TEXT)
         is TerminalEvent.Unknown -> s
     }
 
