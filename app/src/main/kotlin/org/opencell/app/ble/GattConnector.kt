@@ -68,7 +68,7 @@ class GattConnector(
 
     init {
         ContextCompat.registerReceiver(
-            context,
+            context.applicationContext,
             adapterReceiver,
             IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
             ContextCompat.RECEIVER_NOT_EXPORTED, // system broadcasts still arrive
@@ -197,8 +197,16 @@ internal class GattConnection(
         // Deprecated in API 37 in favour of connectGatt(BluetoothGattConnectionSettings, ...),
         // which the Fold 7 (API 36) doesn't have.
         @Suppress("DEPRECATION")
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+        val g = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
             ?: throw GattException("connectGatt failed")
+        gatt = g
+        // Dropped (Bluetooth turning off) before [gatt] was set: dropped() had no client to
+        // close, and close() won't run twice, so close it here or it keeps the terminal's
+        // single connection.
+        if (closed.get()) {
+            g.close()
+            throw GattException("link dropped during setup")
+        }
         withTimeoutOrNull(CONNECT_TIMEOUT) { connected.await() }
             ?: throw GattException("connect timed out")
 

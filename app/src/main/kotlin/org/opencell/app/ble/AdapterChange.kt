@@ -11,7 +11,8 @@ enum class AdapterChange {
     AVAILABLE,
 }
 
-// BLE-only ("BLE on, Bluetooth off") states: hidden in the SDK, but a phone reports them.
+// BLE-only ("BLE on, Bluetooth off") states, hidden in the SDK. AOSP sends them on
+// ACTION_BLE_STATE_CHANGED, not the ACTION_STATE_CHANGED we listen to; mapped defensively.
 private const val STATE_BLE_TURNING_ON = 14
 private const val STATE_BLE_ON = 15
 private const val STATE_BLE_TURNING_OFF = 16
@@ -20,7 +21,8 @@ private const val STATE_BLE_TURNING_OFF = 16
  * Maps [BluetoothAdapter.EXTRA_STATE] to what [GattConnector] does. When the
  * adapter turns off, Android cleans up GATT clients without calling
  * `onConnectionStateChange`, so TURNING_OFF must count as the link dropping;
- * OFF and the BLE-only states catch a TURNING_OFF that was missed. TURNING_ON
+ * OFF catches a TURNING_OFF that was missed, and so would the BLE-only
+ * states, should a device ever send them on this action. TURNING_ON
  * changes nothing: connects only work from ON.
  */
 fun adapterChange(state: Int): AdapterChange? = when (state) {

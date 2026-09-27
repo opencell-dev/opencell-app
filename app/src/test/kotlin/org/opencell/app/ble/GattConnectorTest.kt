@@ -7,17 +7,21 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.Intent
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.OpenCellApplication
+import org.opencell.core.link.ConnectException
 import org.opencell.core.link.Connection
 import org.opencell.core.link.ConnectionEvents
 import org.opencell.core.link.LinkTarget
@@ -25,6 +29,10 @@ import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.GattContract
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowBluetoothGatt
 
 /**
  * [GattConnector] follows the adapter: Bluetooth turning off drops the live
@@ -38,6 +46,9 @@ class GattConnectorTest {
     private val closedReasons = mutableListOf<String>()
     private var bluetoothOn = 0
     private var gatt: BluetoothGatt? = null
+
+    /** Bluetooth turns off inside connectGatt, before open() has the client in hand. */
+    private var turnOffDuringConnectGatt = false
 
     private val events = object : ConnectionEvents {
         override fun onDownlink(payload: ByteArray) = Unit
@@ -55,11 +66,17 @@ class GattConnectorTest {
         val device = adapter.getRemoteDevice(ADDRESS)
         shadowOf(device).setGattConnectionInterceptor { g ->
             gatt = g
+            if (turnOffDuringConnectGatt) adapterState(BluetoothAdapter.STATE_TURNING_OFF)
             val service = terminalService()
             shadowOf(g).addDiscoverableService(service)
             service.characteristics.forEach { shadowOf(g).allowCharacteristicNotification(it) }
             shadowOf(g).notifyConnection(ADDRESS)
         }
+    }
+
+    @After
+    fun tearDown() {
+        ServiceNotBoundGatt.notBound = false
     }
 
     private fun connect(): Pair<GattConnector, Connection> {
@@ -99,6 +116,38 @@ class GattConnectorTest {
         assertTrue("an ON doesn't touch a live link", closedReasons.isEmpty())
     }
 
+    @Test
+    fun bluetoothTurningOffBeforeOpenHasTheClientStillClosesIt() {
+        turnOffDuringConnectGatt = true
+        val connector = GattConnector(app) { bluetoothOn++ }
+        val failed = runCatching { runBlocking { connector.connect(LinkTarget(ADDRESS, null), events) } }
+        assertTrue(failed.exceptionOrNull() is ConnectException)
+        assertTrue("the half-open client is closed, not left holding the terminal", shadowOf(gatt).isClosed)
+        assertTrue("never ready, so no onClosed", closedReasons.isEmpty())
+    }
+
+    @Test
+    fun aLateDisconnectAfterBluetoothTurnedOffIsNotReportedAgain() {
+        val (_, c) = connect()
+        val callback = shadowOf(gatt).gattCallback
+        adapterState(BluetoothAdapter.STATE_TURNING_OFF)
+        callback.onConnectionStateChange(gatt, 0x16, BluetoothProfile.STATE_DISCONNECTED)
+        assertEquals(listOf("Bluetooth turned off"), closedReasons)
+        assertEquals(WriteResult.NotConnected, runBlocking { c.writeCommand(Command.Reject.encode()) })
+    }
+
+    /** The Fold 7's "write not started (Bluetooth service not bound)": the client is dead, so the link drops. */
+    @Test
+    @Config(shadows = [ServiceNotBoundGatt::class])
+    fun aWriteTheStackCanNoLongerServeDropsTheLinkAndIsNotConnected() {
+        val (_, c) = connect()
+        ServiceNotBoundGatt.notBound = true
+        assertEquals(WriteResult.NotConnected, runBlocking { c.writeCommand(Command.Reject.encode()) })
+        assertEquals(1, closedReasons.size)
+        assertTrue(closedReasons.single(), closedReasons.single().startsWith("Bluetooth is off"))
+        assertTrue(shadowOf(gatt).isClosed)
+    }
+
     private fun terminalService() = BluetoothGattService(GattContract.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
         val write = BluetoothGattCharacteristic.PROPERTY_WRITE
         val notify = BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_READ
@@ -120,5 +169,18 @@ class GattConnectorTest {
 
     private companion object {
         const val ADDRESS = "AA:BB:CC:DD:EE:FF"
+    }
+}
+
+/** [ShadowBluetoothGatt] whose writes can be made to fail to start with ERROR_PROFILE_SERVICE_NOT_BOUND. */
+@Implements(BluetoothGatt::class)
+class ServiceNotBoundGatt : ShadowBluetoothGatt() {
+    @Implementation(minSdk = 33)
+    override fun writeCharacteristic(c: BluetoothGattCharacteristic, value: ByteArray, writeType: Int): Int =
+        if (notBound) BluetoothStatusCodes.ERROR_PROFILE_SERVICE_NOT_BOUND else super.writeCharacteristic(c, value, writeType)
+
+    companion object {
+        @Volatile
+        var notBound = false
     }
 }
