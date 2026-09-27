@@ -130,7 +130,7 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   the 5-digit subscriber number can be left out); from anywhere, the full
   `+883-1-606-555-01234`. Spaces, dashes, dots and parentheses are fine. The
   line under the field shows the full number that will be dialled
-  (`numbering-plan.md`). OpenCell carries no emergency calls: 911, 112 and 999
+  ([`numbering-plan.md`](https://github.com/opencell-dev/opencell/blob/main/numbering-plan.md)). OpenCell carries no emergency calls: 911, 112 and 999
   are refused.
   Numbers are shown in the international form, `+883-1-606-555-01234`.
   The call screen shows Calling, Ringing, Connected, and at the end the cause
@@ -190,7 +190,7 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   pairing, and pairing needs the code on the terminal's OLED. Anyone who can
   see that screen can pair a phone. The app still lists every device that
   advertises the OpenCell service: pairing with the code on the screen in
-  front of you is what proves it is your terminal. See `security-model.md`'s
+  front of you is what proves it is your terminal. See [`security-model.md`](https://github.com/opencell-dev/opencell/blob/main/security-model.md)'s
   "BLE hop (terminal ↔ phone)" section on the `terminal` branch.
 - **Voice isn't in this step.** A connected call has the data-frame test
   above, not audio; see Architecture below for where the codec plugs in.
