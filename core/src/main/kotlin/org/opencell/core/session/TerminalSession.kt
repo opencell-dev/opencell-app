@@ -48,7 +48,11 @@ class TerminalSession(
     val link = LinkManager(connector, scope, reconnect, timeSource, wallClock)
     val sender = UplinkSender(link, retryPolicy)
     val console = ConsoleLog(wallClock = wallClock)
-    val phone = PhoneSession(link, sender, scope, phoneMemory, { kind, text -> console.add(kind, text) }, wallClock)
+    private val started = timeSource.markNow()
+    val phone = PhoneSession(
+        link, sender, scope, phoneMemory, { kind, text -> console.add(kind, text) }, wallClock,
+        monotonic = { started.elapsedNow().inWholeMilliseconds },
+    )
     private val runner = LoopbackRunner(link, sender, timeSource)
 
     private val _loopback = MutableStateFlow<LoopbackReport?>(null)

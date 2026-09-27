@@ -232,4 +232,143 @@ class PhoneReducerTest {
         assertEquals(CallPhase.ENDED, ended.call?.phase)
         assertEquals(EndCause.BUSY, ended.call?.cause)
     }
+
+    /** C1: the link was closed for good (the user's Disconnect): nothing will follow the call any more. */
+    @Test
+    fun linkClosedEndsAnActiveCallWithAnUnknownCause() {
+        val inCall = run(registered, ev(TerminalEvent.Incoming(2, peer)), ev(TerminalEvent.Connected(2, 1)))
+        val s = run(inCall, PhoneInput.LinkClosed)
+        assertFalse(s.linkUp)
+        assertEquals(CallPhase.ENDED, s.call?.phase)
+        assertNull(s.call?.causeCode)
+        assertEquals("Call ended (the phone was disconnected from the terminal)", s.call?.endText)
+        // The stored STATUS (IN_CALL) is from a link that's gone: no reconcile re-creates the call.
+        assertNull(PhoneReducer.reconcileDueAt(s))
+        assertEquals(CallPhase.ENDED, PhoneReducer.reduce(s, PhoneInput.Tick(99_000), 99_000).call?.phase)
+    }
+
+    @Test
+    fun linkClosedWithoutACallOnlyTakesTheLinkDown() {
+        val s = run(registered, PhoneInput.LinkClosed)
+        assertFalse(s.linkUp)
+        assertNull(s.call)
+    }
+
+    /** C1: while the link is down, closing the call screen drops the local call; a later Resync brings it back if it's still up. */
+    @Test
+    fun dismissWhileTheLinkIsDownDropsAnActiveCall() {
+        val inCall = run(registered, ev(TerminalEvent.Incoming(2, peer)), ev(TerminalEvent.Connected(2, 1)))
+        assertEquals(CallPhase.CONNECTED, run(inCall, PhoneInput.DismissCall).call?.phase) // link up: only ENDED is dismissed
+        val down = run(inCall, PhoneInput.LinkDown)
+        val dropped = run(down, PhoneInput.DismissCall)
+        assertNull(dropped.call)
+        val back = run(dropped, PhoneInput.Resync(SigState.IN_CALL))
+        assertEquals(CallPhase.CONNECTED, back.call?.phase)
+    }
+
+    /** Triage: re-activating an activated terminal: DIAL would be refused (0x80) until it's done. */
+    @Test
+    fun activatingSetsTheSignallingStateSoDialIsNotOffered() {
+        val s = run(registered, PhoneInput.Activating("+8836065559999"))
+        assertEquals(SigState.ACTIVATING, s.sig)
+        assertFalse(s.canDial)
+    }
+
+    /** Triage: STATUS moving an answered call off INCOMING clears "Answering…". */
+    @Test
+    fun statusMovingACallOffIncomingClearsAnswering() {
+        val answering = PhoneReducer.reduce(run(registered, ev(TerminalEvent.Incoming(2, peer))), PhoneInput.Answering, 10_000)
+        assertTrue(answering.call!!.answering)
+        val late = 10_000 + PhoneReducer.RECONCILE_GRACE_MS
+        val connected = PhoneReducer.reduce(answering, PhoneInput.Status(SigState.IN_CALL), late)
+        assertEquals(CallPhase.CONNECTED, connected.call?.phase)
+        assertFalse(connected.call!!.answering)
+        val releasing = PhoneReducer.reduce(answering, PhoneInput.Status(SigState.RELEASING), late)
+        assertEquals(CallPhase.RELEASING, releasing.call?.phase)
+        assertFalse(releasing.call!!.answering)
+    }
+
+    @Test
+    fun endedWithCallIdZeroEndsACallThatHasNoIdYet() {
+        val s = run(registered, PhoneInput.Dialled(peer), PhoneInput.Releasing, ev(TerminalEvent.Ended(0, 0)))
+        assertEquals(CallPhase.ENDED, s.call?.phase)
+        assertEquals(EndCause.NORMAL, s.call?.cause)
+        assertNull(s.call?.id)
+    }
+
+    @Test
+    fun busyOrUnreachableBeforeACallIdEndsTheCallAndKeepsTheId() {
+        val busy = run(registered, PhoneInput.Dialled(peer), ev(TerminalEvent.Ended(0, 2)))
+        assertEquals(EndCause.BUSY, busy.call?.cause)
+        assertEquals(peer, busy.call?.peer)
+        val unreachable = run(registered, PhoneInput.Dialled(peer), ev(TerminalEvent.Ended(5, 4)))
+        assertEquals(EndCause.UNREACHABLE, unreachable.call?.cause)
+        assertEquals(5L, unreachable.call?.id)
+    }
+
+    @Test
+    fun actFailedTokenUsedThenRegisteredKeepsTheFailureShown() {
+        val s = run(registered, PhoneInput.Activating("+8836065559999"), ev(TerminalEvent.ActivationFailed(2)), ev(TerminalEvent.Registered(me, 1)))
+        assertEquals(Activation.Failed(2), s.activation)
+        assertEquals(SigState.REGISTERED, s.sig)
+        assertEquals(me, s.number)
+    }
+
+    /** The terminal rebooted mid-call: it comes back registering, with no call. */
+    @Test
+    fun resyncRegisteringAfterARebootMidCallEndsTheCall() {
+        val inCall = run(registered, ev(TerminalEvent.Incoming(2, peer)), ev(TerminalEvent.Connected(2, 1)), PhoneInput.LinkDown)
+        val s = run(inCall, PhoneInput.Resync(SigState.REGISTERING))
+        assertEquals(SigState.REGISTERING, s.sig)
+        assertEquals(CallPhase.ENDED, s.call?.phase)
+        assertNull(s.call?.causeCode)
+        assertFalse(s.canDial)
+    }
+
+    /** A STATUS showing a call the app has no event for (the INCOMING was dropped) creates it once no grace applies. */
+    @Test
+    fun statusCreatesACallTheAppHadNoEventFor() {
+        val s = PhoneReducer.reduce(registered, PhoneInput.Status(SigState.RINGING_IN), 50_000)
+        assertEquals(Call(null, Direction.INCOMING, null, CallPhase.INCOMING), s.call)
+        val out = PhoneReducer.reduce(registered, PhoneInput.Status(SigState.IN_CALL), 50_000, wallNow = 1_700_000_000_000)
+        assertEquals(Call(null, null, null, CallPhase.CONNECTED, connectedAt = 1_700_000_000_000), out.call)
+    }
+
+    /** STATUS ended the call first (cause unknown); the ENDED arriving late fills in the cause. */
+    @Test
+    fun aLateEndedBackFillsTheCauseOfACallStatusAlreadyEnded() {
+        val inCall = run(registered, ev(TerminalEvent.Incoming(2, peer)), ev(TerminalEvent.Connected(2, 1)))
+        val byStatus = PhoneReducer.reduce(inCall, PhoneInput.Status(SigState.REGISTERED), 50_000)
+        assertEquals(CallPhase.ENDED, byStatus.call?.phase)
+        assertNull(byStatus.call?.causeCode)
+        val filled = PhoneReducer.reduce(byStatus, ev(TerminalEvent.Ended(2, 3)), 50_100)
+        assertEquals(EndCause.NO_ANSWER, filled.call?.cause)
+        assertEquals(2L, filled.call?.id)
+    }
+
+    @Test
+    fun releasingAndAnsweringWithoutAMatchingCallChangeNothing() {
+        assertEquals(registered, run(registered, PhoneInput.Releasing))
+        assertEquals(registered, run(registered, PhoneInput.Answering))
+        val connected = run(registered, ev(TerminalEvent.Incoming(2, peer)), ev(TerminalEvent.Connected(2, 1)))
+        assertEquals(connected, PhoneReducer.reduce(connected, PhoneInput.Answering, 10_200))
+    }
+
+    @Test
+    fun statusKeepsARegistrationFailureOnlyWhileRegistering() {
+        val failing = run(registered.copy(sig = SigState.REGISTERING), ev(TerminalEvent.RegistrationFailed(4)))
+        assertEquals(4, run(failing, PhoneInput.Status(SigState.REGISTERING)).regFailureCode)
+        assertNull(run(failing, PhoneInput.Status(SigState.REGISTERED)).regFailureCode)
+    }
+
+    @Test
+    fun reconcileDueAtIsTheEndOfTheGraceOnlyWhileAStatusDisagrees() {
+        assertNull(PhoneReducer.reconcileDueAt(registered))
+        assertNull(PhoneReducer.reconcileDueAt(registered.copy(sig = null)))
+        val calling = PhoneReducer.reduce(registered, PhoneInput.Dialled(peer), 10_000)
+        assertNull(PhoneReducer.reconcileDueAt(calling)) // Dialled set sig = CALLING: agrees
+        val held = PhoneReducer.reduce(calling, PhoneInput.Status(SigState.REGISTERED), 10_500)
+        assertEquals(10_000 + PhoneReducer.RECONCILE_GRACE_MS, PhoneReducer.reconcileDueAt(held))
+        assertNull(PhoneReducer.reconcileDueAt(held.copy(linkUp = false)))
+    }
 }

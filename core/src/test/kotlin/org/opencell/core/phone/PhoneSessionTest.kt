@@ -37,7 +37,10 @@ class PhoneSessionTest {
         val link = FakeLink(backgroundScope, testScheduler.timeSource)
         link.statusFlow.value = status(sig)
         val log = mutableListOf<String>()
-        val phone = PhoneSession(link, UplinkSender(link), backgroundScope, memory, { k, t -> log += "$k $t" }, { testScheduler.currentTime })
+        val phone = PhoneSession(
+            link, UplinkSender(link), backgroundScope, memory, { k, t -> log += "$k $t" },
+            clock = { testScheduler.currentTime }, monotonic = { testScheduler.currentTime },
+        )
         runCurrent()
         return Harness(link, phone, memory, log)
     }
@@ -103,7 +106,9 @@ class PhoneSessionTest {
         h.phone.answer()
         runCurrent()
         assertEquals("There is no incoming call to answer", h.phone.state.value.notice)
-        assertNull(h.phone.state.value.call)
+        // No local call changed recently, so no grace holds it back: the terminal's outgoing call shows up.
+        // (This used to assert no call, which only held because the test clock starts at 0 = the old callChangedAt.)
+        assertEquals(Call(null, Direction.OUTGOING, null, CallPhase.RINGING), h.phone.state.value.call)
         assertEquals(SigState.RINGING_OUT, h.phone.state.value.sig)
         assertTrue(h.log.contains("ERROR COMMAND ANSWER: not now (0x80)"))
         h.phone.clearNotice()
@@ -214,6 +219,36 @@ class PhoneSessionTest {
         assertNull(s.notice)
     }
 
+    /** C1: the user's (or the system's) final close ends a call the phone can no longer follow. */
+    @Test
+    fun disconnectingDuringAConnectedCallEndsIt() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        runCurrent()
+        assertEquals(CallPhase.CONNECTED, h.phone.state.value.call?.phase)
+        h.link.stateFlow.value = LinkState.Disconnected
+        runCurrent()
+        val s = h.phone.state.value
+        assertFalse(s.linkUp)
+        assertEquals(CallPhase.ENDED, s.call?.phase)
+        assertNull(s.call?.causeCode) // unknown: the phone lost the terminal
+    }
+
+    /** C1: a drop the link manager was retrying, then the user gives up (Disconnect), also ends the call. */
+    @Test
+    fun disconnectingWhileWaitingToReconnectEndsTheCall() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        runCurrent()
+        h.link.stateFlow.value = LinkState.WaitingToReconnect(LinkTarget(address, null), 1, 1000.milliseconds, "supervision timeout")
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, h.phone.state.value.call?.phase) // a transient drop keeps the call
+        h.link.stateFlow.value = LinkState.Disconnected
+        runCurrent()
+        assertEquals(CallPhase.ENDED, h.phone.state.value.call?.phase)
+    }
+
     @Test
     fun aStatusHeldBackByTheGraceEndsTheCallOnceItElapsesWithNoFurtherInput() = runTest {
         val h = harness()
@@ -222,10 +257,107 @@ class PhoneSessionTest {
         assertEquals(CallPhase.CALLING, h.phone.state.value.call?.phase)
         // A STATUS(REGISTERED) arrives inside the grace: it disagrees with the
         // just-dialled call, so it's held back rather than reconciled right away.
-        h.link.statusFlow.value = status(SigState.REGISTERED).copy(frame = 1001)
+        // A fresh read when the grace ends still says REGISTERED (the call really is gone).
+        h.link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001))
         runCurrent()
         assertEquals(CallPhase.CALLING, h.phone.state.value.call?.phase)
         // Advancing time past the grace, with no further EVENT or STATUS, still ends the call.
+        advanceTimeBy(PhoneReducer.RECONCILE_GRACE_MS + 1)
+        runCurrent()
+        assertEquals(CallPhase.ENDED, h.phone.state.value.call?.phase)
+    }
+
+    /**
+     * I2: the firmware notifies no STATUS on DIAL, so a STATUS sent just before the terminal
+     * took DIAL (and handled after it) may be the last one for a while. When the grace ends the
+     * session reads STATUS afresh instead of trusting the stored one.
+     */
+    @Test
+    fun aStaleStatusAfterDialIsCheckedWithAFreshReadBeforeTheCallIsEnded() = runTest {
+        val h = harness()
+        assertNull(h.phone.dial("+883 606 555 0100"))
+        runCurrent()
+        h.link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001)) // stale: read before DIAL was taken
+        h.link.refreshOverride = status(SigState.CALLING) // what the terminal really says now
+        runCurrent()
+        advanceTimeBy(PhoneReducer.RECONCILE_GRACE_MS + 1)
+        runCurrent()
+        assertEquals(CallPhase.CALLING, h.phone.state.value.call?.phase)
+        assertEquals(SigState.CALLING, h.phone.state.value.sig)
+        advanceTimeBy(10_000)
+        assertEquals(CallPhase.CALLING, h.phone.state.value.call?.phase) // no further tick ends it
+    }
+
+    /** I2: if that fresh read fails, the held STATUS is reconciled as before. */
+    @Test
+    fun whenTheFreshReadFailsTheHeldStatusStillEndsTheCall() = runTest {
+        val h = harness()
+        assertNull(h.phone.dial("+883 606 555 0100"))
+        runCurrent()
+        h.link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001))
+        h.link.refreshFails = true
+        runCurrent()
+        advanceTimeBy(PhoneReducer.RECONCILE_GRACE_MS + 1)
+        runCurrent()
+        assertEquals(CallPhase.ENDED, h.phone.state.value.call?.phase)
+    }
+
+    /** I2: the grace runs on a monotonic clock; the wall clock (stepped back here) only times the call display. */
+    @Test
+    fun theGraceIgnoresWallClockSteps() = runTest {
+        var wallOffset = 0L
+        val link = FakeLink(backgroundScope, testScheduler.timeSource)
+        link.statusFlow.value = status(SigState.REGISTERED)
+        val phone = PhoneSession(
+            link, UplinkSender(link), backgroundScope,
+            clock = { 1_700_000_000_000L + testScheduler.currentTime + wallOffset },
+            monotonic = { testScheduler.currentTime },
+        )
+        runCurrent()
+        assertNull(phone.dial("+883 606 555 0100"))
+        runCurrent()
+        wallOffset = -3_600_000L // NTP steps the wall clock back an hour
+        link.notifyStatus(status(SigState.REGISTERED).copy(frame = 1001))
+        link.refreshFails = true
+        runCurrent()
+        advanceTimeBy(PhoneReducer.RECONCILE_GRACE_MS + 1)
+        runCurrent()
+        assertEquals(CallPhase.ENDED, phone.state.value.call?.phase)
+    }
+
+    /** M6: EVENTs and STATUS notifications are applied in the order they arrived. */
+    @Test
+    fun eventsAndStatusNotificationsAreAppliedInArrivalOrder() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        runCurrent()
+        advanceTimeBy(PhoneReducer.RECONCILE_GRACE_MS + 1)
+        // CONNECTED, the STATUS that follows it (IN_CALL), then ENDED, all in one burst.
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        h.link.notifyStatus(status(SigState.IN_CALL))
+        h.link.emitEvent(TerminalEvent.Ended(3, 0))
+        runCurrent()
+        val s = h.phone.state.value
+        assertEquals(CallPhase.ENDED, s.call?.phase)
+        // Applied in order, IN_CALL came before ENDED: nothing disagrees and nothing is held.
+        assertEquals(SigState.REGISTERED, s.sig)
+        assertNull(PhoneReducer.reconcileDueAt(s))
+    }
+
+    /** The failed-refresh path on reconnect goes through the reducer, so a held STATUS is still reconciled. */
+    @Test
+    fun aFailedReadOnReconnectStillLetsAHeldStatusBeReconciled() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        runCurrent()
+        h.link.notifyStatus(status(SigState.REGISTERED)) // held: inside the grace
+        runCurrent()
+        h.link.stateFlow.value = LinkState.WaitingToReconnect(LinkTarget(address, null), 1, 1000.milliseconds, "supervision timeout")
+        runCurrent()
+        h.link.refreshFails = true
+        h.link.stateFlow.value = LinkState.Connected(LinkTarget(address, null), 247)
+        runCurrent()
+        assertTrue(h.phone.state.value.linkUp)
         advanceTimeBy(PhoneReducer.RECONCILE_GRACE_MS + 1)
         runCurrent()
         assertEquals(CallPhase.ENDED, h.phone.state.value.call?.phase)

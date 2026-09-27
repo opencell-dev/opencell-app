@@ -120,9 +120,8 @@ sealed interface TerminalEvent {
         override fun encode() = byteArrayOf(code.toByte())
     }
 
-    /** An event code this app doesn't know, or an event too short for its code. */
-    data class Unknown(val hex: String) : TerminalEvent {
-        override val code get() = encode().firstOrNull()?.toInt()?.and(0xFF) ?: -1
+    /** An event code this app doesn't know, or an event too short for its code. [code] is its first byte (-1 if empty). */
+    data class Unknown(val hex: String, override val code: Int) : TerminalEvent {
         override val label get() = "unknown event $hex"
         override fun encode() = (Hex.parse(hex) as Hex.Parse.Ok).bytes
     }
@@ -140,7 +139,7 @@ sealed interface TerminalEvent {
 
         /** Decodes one EVENT value. Extra trailing bytes are ignored (a newer firmware may add fields). */
         fun decode(raw: ByteArray): TerminalEvent {
-            val unknown = Unknown(Hex.format(raw))
+            val unknown = Unknown(Hex.format(raw), raw.firstOrNull()?.toInt()?.and(0xFF) ?: -1)
             if (raw.isEmpty()) return unknown
             val n = raw.size - 1
             fun u8(i: Int) = raw[i].toInt() and 0xFF

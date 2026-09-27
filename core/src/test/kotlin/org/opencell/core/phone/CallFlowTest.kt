@@ -17,8 +17,10 @@ import org.opencell.core.protocol.RegMode
 import org.opencell.core.protocol.SigState
 import org.opencell.core.session.ConsoleKind
 import org.opencell.core.session.TerminalSession
+import org.opencell.core.sim.SimTiming
 import org.opencell.core.sim.SimulatedTerminal
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The spec §1 "done" flows on virtual time, end to end:
@@ -33,8 +35,8 @@ class CallFlowTest {
         val state get() = session.phone.state.value
     }
 
-    private fun TestScope.bench(activated: Boolean, mode: RegMode = RegMode.PART15): Bench {
-        val sim = SimulatedTerminal(backgroundScope, activatedNumber = if (activated) me else null, mode = mode)
+    private fun TestScope.bench(activated: Boolean, mode: RegMode = RegMode.PART15, timing: SimTiming = SimTiming()): Bench {
+        val sim = SimulatedTerminal(backgroundScope, activatedNumber = if (activated) me else null, mode = mode, timing = timing)
         val session = TerminalSession(sim, backgroundScope, testScheduler.timeSource, { testScheduler.currentTime })
         return Bench(sim, session)
     }
@@ -170,8 +172,8 @@ class CallFlowTest {
         connect(b)
         b.sim.incomingCall(peer)
         advanceTimeBy(60_010) // the terminal's ring timeout (60 s), like a local REJECT/HANGUP
-        assertEquals(SigState.RELEASING, b.state.sig)
-        assertEquals(CallPhase.RELEASING, b.state.call?.phase)
+        // The terminal is RELEASING now, but like the firmware it notifies nothing until ENDED.
+        assertEquals(SigState.RELEASING, b.sim.sigState)
         advanceTimeBy(1_000) // the release delay before ENDED
         assertEquals(EndCause.NO_ANSWER, b.state.call?.cause)
     }
@@ -226,5 +228,74 @@ class CallFlowTest {
         assertNull(b.state.call)
         b.session.disconnect()
         advanceUntilIdle()
+    }
+
+    /**
+     * I2: the firmware notifies no STATUS on DIAL. A STATUS put together just before the terminal
+     * took DIAL but handled after it (REGISTERED), with no other STATUS for longer than the grace
+     * (a slow network: CALL_PROC takes 5 s), must not end the call: the grace re-reads STATUS.
+     */
+    @Test
+    fun aStaleStatusRightAfterDialDoesNotEndTheCall() = runTest {
+        val b = bench(activated = true, timing = SimTiming(setup = 5.seconds))
+        connect(b)
+        assertNull(b.phone.dial(peer))
+        advanceTimeBy(100)
+        assertEquals(CallPhase.CALLING, b.state.call?.phase)
+        b.sim.notifyStatus(staleSig = SigState.REGISTERED)
+        advanceTimeBy(3_000) // past the grace; still no STATUS from the terminal
+        assertEquals(CallPhase.CALLING, b.state.call?.phase)
+        advanceTimeBy(3_000)
+        assertEquals(CallPhase.RINGING, b.state.call?.phase)
+        assertEquals(1L, b.state.call?.id)
+    }
+
+    /** I2: a stale IN_CALL handled after the hang-up's ENDED doesn't bring the call back. */
+    @Test
+    fun aStaleInCallAfterHangUpDoesNotRecreateTheCall() = runTest {
+        val b = bench(activated = true)
+        connect(b)
+        assertNull(b.phone.dial(peer))
+        advanceTimeBy(4_000)
+        assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
+        b.phone.hangup()
+        advanceTimeBy(1_000)
+        assertEquals(CallPhase.ENDED, b.state.call?.phase)
+        b.sim.notifyStatus(staleSig = SigState.IN_CALL)
+        advanceTimeBy(5_000)
+        assertEquals(CallPhase.ENDED, b.state.call?.phase)
+        assertEquals(EndCause.NORMAL, b.state.call?.cause)
+        assertEquals(SigState.REGISTERED, b.state.sig)
+    }
+
+    /** Like lc_sig_term.c: a HANGUP before CALL_SETUP has gone out just drops it, and the call ends at once (call id 0). */
+    @Test
+    fun hangUpBeforeCallSetupIsSentEndsAtOnce() = runTest {
+        val b = bench(activated = true)
+        connect(b)
+        assertNull(b.phone.dial(peer))
+        b.phone.hangup()
+        advanceTimeBy(60) // both writes (15 ms each), well inside the 120 ms before CALL_SETUP goes out
+        assertEquals(CallPhase.ENDED, b.state.call?.phase)
+        assertEquals(EndCause.NORMAL, b.state.call?.cause)
+        assertNull(b.state.call?.id)
+        assertEquals(SigState.REGISTERED, b.sim.sigState)
+    }
+
+    /** Like lc_sig_term.c: a HANGUP after CALL_SETUP but before CALL_PROC waits for the call id, then RELEASEs that call. */
+    @Test
+    fun hangUpAfterCallSetupWaitsForTheCallIdThenReleases() = runTest {
+        val b = bench(activated = true)
+        connect(b)
+        assertNull(b.phone.dial(peer))
+        advanceTimeBy(200) // CALL_SETUP is out (120 ms); CALL_PROC comes at 400 ms
+        b.phone.hangup()
+        advanceTimeBy(100)
+        assertEquals(CallPhase.RELEASING, b.state.call?.phase)
+        assertEquals(SigState.RELEASING, b.sim.sigState)
+        advanceTimeBy(1_000) // CALL_PROC, then the release
+        assertEquals(CallPhase.ENDED, b.state.call?.phase)
+        assertEquals(EndCause.NORMAL, b.state.call?.cause)
+        assertEquals(1L, b.state.call?.id) // the RELEASE (and ENDED) carry CALL_PROC's call id
     }
 }

@@ -33,6 +33,8 @@ data class SimTiming(
     val registration: Duration = 800.milliseconds,
     /** DIAL to RINGING (CALL_SETUP, CALL_PROC, ALERTING). */
     val setup: Duration = 400.milliseconds,
+    /** DIAL to CALL_SETUP going out on the air (the next UL frame); a HANGUP before this just drops it. Less than [setup]. */
+    val setupSent: Duration = 120.milliseconds,
     /** The simulated peer answers after ringing this long, like `lcbench net`'s peer (3 s). */
     val peerAnswers: Duration = 3.seconds,
     /** ANSWER to CONNECTED. */
@@ -53,6 +55,9 @@ data class SimTiming(
  *   peer echoes each on DOWN after [echoDelay];
  * - COMMANDs are checked like `lc_sig_term_command` (0x0D length, 0x81 argument,
  *   0x80 state), and EVENTs and STATUS byte 3 follow like the firmware's;
+ * - STATUS is notified only with an EVENT or a radio state change, like the
+ *   firmware (term_app.c): not on DIAL, ANSWER, HANGUP, REJECT, ACTIVATE or a
+ *   call timer, and not periodically;
  * - activation accepts any valid code whose token wasn't used here and hasn't
  *   expired; outgoing calls ring and are answered after [SimTiming.peerAnswers];
  *   dialling your own number is busy, [UNREACHABLE] is unreachable;
@@ -92,6 +97,12 @@ class SimulatedTerminal(
     private var answered = false
     private var pending: Job? = null
 
+    /** An outgoing call's CALL_SETUP has gone out (so a HANGUP must wait for CALL_PROC's call id). */
+    private var setupSent = false
+
+    /** HANGUP came while CALLING before CALL_PROC: release once the call id arrives (the firmware's hangup_pending). */
+    private var hangupPending = false
+
     /** Makes the next activation fail with this reason (the network's ACT_NAK), then clears itself. */
     @Volatile
     var failNextActivation: ActFailReason? = null
@@ -128,10 +139,9 @@ class SimulatedTerminal(
         emit(TerminalEvent.Incoming(callId, caller))
         later(timing.ringTimeout) {
             // Like the firmware (lc_sig_term.c): an unanswered incoming call goes
-            // RINGING_IN -> RELEASING (a STATUS notification, no EVENT yet) and only
-            // ends once the release completes, same as a local HANGUP/REJECT.
+            // RINGING_IN -> RELEASING (no EVENT, so no STATUS notification either) and
+            // only ends once the release completes, same as a local HANGUP/REJECT.
             sig = SigState.RELEASING
-            statusChanged()
             later(timing.release) { end(EndCause.NO_ANSWER) }
         }
         true
@@ -172,13 +182,18 @@ class SimulatedTerminal(
         sim.deliverStatus(status())
     }
 
-    private fun statusChanged() {
-        current?.deliverStatus(status())
+    /**
+     * For tests: a STATUS notification now, as if the radio state had changed. With [staleSig] it
+     * carries that signalling state instead of the current one: a notification the terminal
+     * put together just before it took a command, which the phone handles after the command.
+     */
+    fun notifyStatus(staleSig: SigState? = null) = synchronized(lock) {
+        val st = status()
+        current?.deliverStatus(if (staleSig != null) st.copy(sigCode = staleSig.code) else st)
     }
 
     private fun startRegistration() {
         sig = SigState.REGISTERING
-        statusChanged()
         if (radio == TerminalState.GRANTED) {
             later(timing.registration) {
                 sig = SigState.REGISTERED
@@ -210,17 +225,30 @@ class SimulatedTerminal(
     private fun startOutgoing(called: String) {
         sig = SigState.CALLING
         callId = 0
-        statusChanged()
-        later(timing.setup) {
-            callId = nextCallId++
-            when (called) {
-                number -> end(EndCause.BUSY)
-                UNREACHABLE -> end(EndCause.UNREACHABLE)
-                else -> {
-                    sig = SigState.RINGING_OUT
-                    emit(TerminalEvent.Ringing(callId))
-                    later(timing.peerAnswers) { connectCall() }
-                }
+        setupSent = false
+        hangupPending = false
+        later(timing.setupSent) {
+            setupSent = true
+            later(timing.setup - timing.setupSent) { callProceeding(called) }
+        }
+    }
+
+    /** CALL_PROC (the call id), then ALERTING or the network's release, all in one step here. */
+    private fun callProceeding(called: String) {
+        callId = nextCallId++
+        if (hangupPending) {
+            // As lc_sig_term.c: the HANGUP that came before the call id is sent as RELEASE now.
+            hangupPending = false
+            later(timing.release) { end(EndCause.NORMAL) }
+            return
+        }
+        when (called) {
+            number -> end(EndCause.BUSY)
+            UNREACHABLE -> end(EndCause.UNREACHABLE)
+            else -> {
+                sig = SigState.RINGING_OUT
+                emit(TerminalEvent.Ringing(callId))
+                later(timing.peerAnswers) { connectCall() }
             }
         }
     }
@@ -237,6 +265,8 @@ class SimulatedTerminal(
         sig = SigState.REGISTERED
         callId = 0
         answered = false
+        setupSent = false
+        hangupPending = false
         emit(TerminalEvent.Ended(id, cause.code))
     }
 
@@ -250,7 +280,6 @@ class SimulatedTerminal(
                 val qr = (ActivationQr.parse(a.decodeToString()) as? QrParse.Ok)?.qr ?: return WriteResult.BadArgument
                 if (sig == SigState.ACTIVATING || sig.hasCall) return WriteResult.NotNow
                 sig = SigState.ACTIVATING
-                statusChanged()
                 later(timing.activation) { finishActivation(qr) }
             }
             Command.DIAL -> {
@@ -276,8 +305,17 @@ class SimulatedTerminal(
                 }
                 if (!ok) return WriteResult.NotNow
                 val cause = if (ringingIn) EndCause.REJECTED else EndCause.NORMAL
+                if (sig == SigState.CALLING && callId == 0L) {
+                    // As lc_sig_term.c: before CALL_PROC there's no call id to RELEASE.
+                    if (!setupSent) {
+                        end(EndCause.NORMAL) // CALL_SETUP never went out: drop it and end at once
+                        return WriteResult.Accepted
+                    }
+                    hangupPending = true // RELEASE once CALL_PROC gives the call id (its timer keeps running)
+                    sig = SigState.RELEASING
+                    return WriteResult.Accepted
+                }
                 sig = SigState.RELEASING
-                statusChanged()
                 later(timing.release) { end(cause) }
             }
             Command.DEACTIVATE -> {
@@ -308,7 +346,10 @@ class SimulatedTerminal(
         sigCode = sig.code,
     )
 
-    /** One radio frame: the attach walk, a jittered RSSI every 8 frames, one queued UP frame sent. */
+    /**
+     * One radio frame: the attach walk, a jittered RSSI every 8 frames (shown on the next
+     * STATUS; RSSI alone notifies nothing, like the firmware), one queued UP frame sent.
+     */
     private fun tick(sim: Sim): ByteArray? = synchronized(lock) {
         frames++
         val next = when {
@@ -322,7 +363,7 @@ class SimulatedTerminal(
         radio = next
         if (frames % 8 == 0) rssi = -52 + random.nextInt(-3, 4)
         if (changed && radio == TerminalState.GRANTED && sig == SigState.REGISTERING && pending == null) startRegistration()
-        if (changed || frames % 8 == 0) sim.deliverStatus(status())
+        if (changed) sim.deliverStatus(status())
         if (radio == TerminalState.GRANTED) sim.queue.removeFirstOrNull() else null
     }
 

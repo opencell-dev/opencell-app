@@ -140,7 +140,28 @@ class LinkManagerTest {
         c.events.onEvent(byteArrayOf(0x06, 0, 0, 0, 7))
         c.events.onEvent(byteArrayOf(0x7F))
         runCurrent()
-        assertEquals(listOf(TerminalEvent.Ringing(7), TerminalEvent.Unknown("7f")), events)
+        assertEquals(listOf(TerminalEvent.Ringing(7), TerminalEvent.Unknown("7f", 0x7F)), events)
+    }
+
+    /** M6: EVENT and STATUS notifications share one stream, in arrival order (malformed STATUS dropped). */
+    @Test
+    fun inputsKeepEventsAndStatusInArrivalOrder() = runTest {
+        val connector = FakeConnector()
+        val m = manager(connector)
+        val inputs = mutableListOf<LinkInput>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { m.inputs.collect { inputs += it } }
+        m.connect(target)
+        advanceTimeBy(101)
+        val c = connector.connections.single()
+        c.events.onEvent(byteArrayOf(0x06, 0, 0, 0, 7))
+        c.events.onStatus(status.encode())
+        c.events.onStatus(ByteArray(3))
+        c.events.onEvent(byteArrayOf(0x08, 0, 0, 0, 7, 0))
+        runCurrent()
+        assertEquals(
+            listOf(LinkInput.Event(TerminalEvent.Ringing(7)), LinkInput.Status(status), LinkInput.Event(TerminalEvent.Ended(7, 0))),
+            inputs,
+        )
     }
 
     @Test

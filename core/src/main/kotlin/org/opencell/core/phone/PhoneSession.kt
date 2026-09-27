@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.opencell.core.link.LinkInput
 import org.opencell.core.link.LinkState
 import org.opencell.core.link.TerminalLink
 import org.opencell.core.link.UplinkSender
@@ -71,13 +72,19 @@ data class CallData(
  * mere command refusal hasn't earned); if that read fails, nothing changes.
  * A command identical to one already in flight is ignored rather than queued.
  *
- * The firmware only notifies STATUS on change and can drop EVENTs, so
- * [PhoneReducer] can hold a disagreeing STATUS back for
- * [PhoneReducer.RECONCILE_GRACE_MS] rather than act on it immediately. After
- * every reduce this schedules a single pending [PhoneInput.Tick] at
- * [PhoneReducer.reconcileDueAt] (cancelling and replacing any earlier one) so
- * that a held-back correction is still carried through even if nothing else
- * happens.
+ * EVENTs and STATUS notifications are applied from one ordered stream
+ * ([TerminalLink.inputs]), in the order they arrived.
+ *
+ * The firmware notifies STATUS only with an EVENT or a radio state change (not
+ * on DIAL, ANSWER, HANGUP or REJECT) and can drop EVENTs, so [PhoneReducer]
+ * holds a disagreeing STATUS back for [PhoneReducer.RECONCILE_GRACE_MS] rather
+ * than act on it immediately. After every reduce this schedules a single
+ * pending check at [PhoneReducer.reconcileDueAt] (cancelling and replacing any
+ * earlier one). When it's due it reads STATUS afresh and applies that — the
+ * stored one may be a stale notification sent just before an accepted command
+ * — and only if the read fails reconciles against the stored one ([PhoneInput.Tick]).
+ *
+ * [monotonic] times the grace; [clock] (wall time) only what's displayed.
  */
 class PhoneSession(
     private val link: TerminalLink,
@@ -86,6 +93,7 @@ class PhoneSession(
     private val memory: PhoneMemory = PhoneMemory.inMemory(),
     private val log: (ConsoleKind, String) -> Unit = { _, _ -> },
     private val clock: () -> Long = System::currentTimeMillis,
+    private val monotonic: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val lock = Any()
     private val commandLock = Mutex()
@@ -110,20 +118,24 @@ class PhoneSession(
 
     init {
         scope.launch {
-            link.events.collect { e ->
-                log(ConsoleKind.INFO, "EVENT ${e.label}")
-                apply(PhoneInput.Event(e))
+            // One collector for both, so an EVENT and the STATUS around it are applied in arrival order.
+            link.inputs.collect { input ->
+                when (input) {
+                    is LinkInput.Event -> {
+                        log(ConsoleKind.INFO, "EVENT ${input.event.label}")
+                        apply(PhoneInput.Event(input.event))
+                    }
+                    is LinkInput.Status -> input.status.sig?.let { apply(PhoneInput.Status(it)) }
+                }
             }
         }
         scope.launch {
-            link.status.collect { st -> st?.sig?.let { apply(PhoneInput.Status(it)) } }
-        }
-        scope.launch {
             link.state.collect { s ->
-                if (s is LinkState.Connected) {
-                    onConnected(s.target.address)
-                } else if (_state.value.linkUp) {
-                    apply(PhoneInput.LinkDown)
+                when {
+                    s is LinkState.Connected -> onConnected(s.target.address)
+                    // Closed for good (Disconnect): no reconnect will update the call, so end it.
+                    s is LinkState.Disconnected -> if (_state.value.linkUp || _state.value.activeCall != null) apply(PhoneInput.LinkClosed)
+                    _state.value.linkUp -> apply(PhoneInput.LinkDown)
                 }
             }
         }
@@ -270,14 +282,14 @@ class PhoneSession(
     /**
      * Reads STATUS and reconciles with it (after connecting). If the fresh
      * read fails, this does NOT fall back to the link's last (possibly stale,
-     * pre-disconnect) STATUS: it only updates [PhoneState.linkUp] and leaves
-     * the rest as it is, trusting the next STATUS notification or the next
-     * connect's resync to catch up.
+     * pre-disconnect) STATUS: it only marks the link up ([PhoneInput.LinkUp],
+     * through the reducer like everything else) and leaves the rest as it is,
+     * trusting the next STATUS notification or the next connect's resync to catch up.
      */
     private suspend fun resync() {
         val sig = link.refreshStatus()?.sig
         if (sig == null) {
-            synchronized(lock) { _state.update { it.copy(linkUp = link.state.value.isConnected) } }
+            if (link.state.value.isConnected) apply(PhoneInput.LinkUp)
             return
         }
         apply(PhoneInput.Resync(sig, address()?.let(memory::load)))
@@ -288,7 +300,7 @@ class PhoneSession(
     private fun apply(input: PhoneInput) {
         synchronized(lock) {
             val before = _state.value
-            val after = PhoneReducer.reduce(before, input, clock())
+            val after = PhoneReducer.reduce(before, input, monotonic(), clock())
             _state.value = after
             if (before.call?.phase != CallPhase.CONNECTED && after.call?.phase == CallPhase.CONNECTED) _callData.value = CallData()
             if (dataJob != null && (after.call?.phase != CallPhase.CONNECTED || !after.linkUp)) {
@@ -306,18 +318,22 @@ class PhoneSession(
     }
 
     /**
-     * Schedules (or cancels) the single pending [PhoneInput.Tick] for [state],
+     * Schedules (or cancels) the single pending reconcile check for [state],
      * per [PhoneReducer.reconcileDueAt]: replaces any previously pending one,
-     * and fires immediately if the due time has already passed.
+     * and runs immediately if the due time has already passed. The check reads
+     * STATUS afresh and applies it as a [PhoneInput.Status] (the grace is over,
+     * so the reducer reconciles against it); only if that read fails does it
+     * fall back to a [PhoneInput.Tick] against the stored STATUS.
      */
     private fun scheduleReconcile(state: PhoneState) {
         val dueAt = PhoneReducer.reconcileDueAt(state)
         pendingTick?.cancel()
         pendingTick = dueAt?.let { at ->
             scope.launch {
-                val wait = at - clock()
+                val wait = at - monotonic()
                 if (wait > 0) delay(wait)
-                apply(PhoneInput.Tick(clock()))
+                val fresh = link.refreshStatus()?.sig
+                apply(if (fresh != null) PhoneInput.Status(fresh) else PhoneInput.Tick(monotonic()))
             }
         }
     }

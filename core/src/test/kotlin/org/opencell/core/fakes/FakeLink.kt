@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.opencell.core.link.Downlink
+import org.opencell.core.link.LinkInput
 import org.opencell.core.link.LinkState
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.link.TerminalLink
@@ -21,8 +22,8 @@ import kotlin.time.TimeSource
  * A scriptable [TerminalLink] on virtual time: write results come from
  * [results] (Accepted when empty), and accepted writes can be echoed on DOWN
  * after [echoDelay] like the bench test cell does. COMMAND writes are recorded
- * in [commands] with results from [commandResults]; [emitEvent], [statusFlow]
- * and [stateFlow] play the terminal's side.
+ * in [commands] with results from [commandResults]; [emitEvent], [notifyStatus],
+ * [statusFlow] (what a STATUS read returns) and [stateFlow] play the terminal's side.
  */
 class FakeLink(
     private val scope: CoroutineScope,
@@ -63,8 +64,19 @@ class FakeLink(
     private val _events = MutableSharedFlow<TerminalEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<TerminalEvent> = _events
 
+    private val _inputs = MutableSharedFlow<LinkInput>(extraBufferCapacity = 64)
+    override val inputs: SharedFlow<LinkInput> = _inputs
+
+    /** An EVENT notification from the terminal. */
     fun emitEvent(event: TerminalEvent) {
         check(_events.tryEmit(event))
+        check(_inputs.tryEmit(LinkInput.Event(event)))
+    }
+
+    /** A STATUS notification from the terminal (also what a later [refreshStatus] reads, unless overridden). */
+    fun notifyStatus(status: TerminalStatus) {
+        statusFlow.value = status
+        check(_inputs.tryEmit(LinkInput.Status(status)))
     }
 
     override suspend fun writeCommand(payload: ByteArray): WriteResult {

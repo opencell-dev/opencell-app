@@ -71,10 +71,13 @@ class CommandEventTest {
 
     @Test
     fun shortOrUnknownEventsAreKeptNotThrown() {
-        assertEquals(TerminalEvent.Unknown("05 00 00 00 01"), TerminalEvent.decode(bytes("05 00 00 00 01")))
-        assertEquals(TerminalEvent.Unknown("7f 01"), TerminalEvent.decode(bytes("7f 01")))
-        assertEquals(TerminalEvent.Unknown(""), TerminalEvent.decode(ByteArray(0)))
-        assertEquals(0x7F, TerminalEvent.Unknown("7f 01").code)
+        assertEquals(TerminalEvent.Unknown("05 00 00 00 01", 0x05), TerminalEvent.decode(bytes("05 00 00 00 01")))
+        assertEquals(TerminalEvent.Unknown("7f 01", 0x7F), TerminalEvent.decode(bytes("7f 01")))
+        assertEquals(TerminalEvent.Unknown("", -1), TerminalEvent.decode(ByteArray(0)))
+        assertEquals(0x7F, TerminalEvent.decode(bytes("7f 01")).code)
+        assertEquals(-1, TerminalEvent.decode(ByteArray(0)).code)
+        // The code is the raw byte, kept at decode time: nothing re-parses the hex text.
+        assertEquals(0x05, TerminalEvent.Unknown("not hex", 0x05).code)
     }
 
     @Test

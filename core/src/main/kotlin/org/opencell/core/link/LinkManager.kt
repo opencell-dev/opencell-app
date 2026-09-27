@@ -56,6 +56,9 @@ class LinkManager(
     private val _events = MutableSharedFlow<TerminalEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<TerminalEvent> = _events.asSharedFlow()
 
+    private val _inputs = MutableSharedFlow<LinkInput>(extraBufferCapacity = 128)
+    override val inputs: SharedFlow<LinkInput> = _inputs.asSharedFlow()
+
     private val control = Mutex()
     private var job: Job? = null
 
@@ -120,12 +123,18 @@ class LinkManager(
                     _downlink.tryEmit(Downlink(payload.copyOf(), timeSource.markNow(), wallClock()))
                 }
 
+                // Called one at a time by the transport, in the order the notifications arrived.
                 override fun onStatus(raw: ByteArray) {
-                    TerminalStatus.decodeOrNull(raw)?.let(::publishStatus)
+                    TerminalStatus.decodeOrNull(raw)?.let {
+                        publishStatus(it)
+                        _inputs.tryEmit(LinkInput.Status(it))
+                    }
                 }
 
                 override fun onEvent(raw: ByteArray) {
-                    _events.tryEmit(TerminalEvent.decode(raw))
+                    val e = TerminalEvent.decode(raw)
+                    _events.tryEmit(e)
+                    _inputs.tryEmit(LinkInput.Event(e))
                 }
 
                 override fun onClosed(reason: String) {

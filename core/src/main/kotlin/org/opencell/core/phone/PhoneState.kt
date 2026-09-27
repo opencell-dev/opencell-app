@@ -36,7 +36,7 @@ data class Call(
     val causeCode: Int? = null,
     /** ANSWER was accepted; CONNECTED hasn't come yet. */
     val answering: Boolean = false,
-    /** Wall-clock millis of CONNECTED, for the call timer. */
+    /** Wall-clock millis of CONNECTED, for the call display. */
     val connectedAt: Long? = null,
 ) {
     val cause: EndCause? get() = causeCode?.let { EndCause.fromCode(it) }
@@ -76,14 +76,23 @@ data class PhoneState(
     val activation: Activation = Activation.Idle,
     val regFailureCode: Int? = null,
     val call: Call? = null,
-    /** Wall-clock millis of the last local change to [call] (event or accepted command). */
-    val callChangedAt: Long = 0L,
+    /**
+     * Monotonic millis of the last local change to [call] (event or accepted command), for the
+     * reconcile grace; [NEVER] until the first. Not wall-clock time: a clock step must not
+     * stretch or skip the grace.
+     */
+    val callChangedAt: Long = NEVER,
     /** A one-line message for the user: a refused command, a bad number. */
     val notice: String? = null,
 ) {
     val regFailure: RegFailReason? get() = regFailureCode?.let { RegFailReason.fromCode(it) }
     val activeCall: Call? get() = call?.takeIf { it.phase.active }
     val canDial: Boolean get() = linkUp && sig == SigState.REGISTERED && activeCall == null
+
+    companion object {
+        /** [callChangedAt] before any call change: long enough ago that no grace applies. */
+        const val NEVER = Long.MIN_VALUE / 2
+    }
 }
 
 /** A number and mode remembered from an earlier REGISTERED (display only; the terminal holds the keys). */
@@ -108,7 +117,18 @@ sealed interface PhoneInput {
      */
     data class Tick(val now: Long) : PhoneInput
 
+    /** The link dropped; the link manager is retrying, and the next [Resync] catches up. The call stays. */
     data object LinkDown : PhoneInput
+
+    /** The link came up but STATUS couldn't be read: only [PhoneState.linkUp] changes; the next STATUS catches up. */
+    data object LinkUp : PhoneInput
+
+    /**
+     * The link was closed for good (the user's Disconnect, or the service stopping): no
+     * reconnect follows, so nothing will ever update an active call again. It ends with an
+     * unknown cause, and the stored signalling state (from a link that's gone) is forgotten.
+     */
+    data object LinkClosed : PhoneInput
 
     /** The terminal accepted ACTIVATE for a code for [number]. */
     data class Activating(val number: String) : PhoneInput
@@ -124,7 +144,11 @@ sealed interface PhoneInput {
 
     data class Notice(val text: String?) : PhoneInput
 
-    /** The user closed the "call ended" screen. */
+    /**
+     * The user closed the call screen: an ENDED call, or (while the link is down, when the
+     * call's buttons can't reach the terminal) any call. A call that is really still up in
+     * the terminal comes back with the next [Resync].
+     */
     data object DismissCall : PhoneInput
 
     /** The user acknowledged an activation result. */
@@ -148,28 +172,43 @@ sealed interface PhoneInput {
 object PhoneReducer {
     const val RECONCILE_GRACE_MS = 2_000L
 
-    fun reduce(s: PhoneState, input: PhoneInput, now: Long): PhoneState =
-        reconcileIfDue(apply(s, input, now), now)
+    /**
+     * [now] is monotonic millis (the grace, [PhoneState.callChangedAt], [PhoneInput.Tick]);
+     * [wallNow] is wall-clock millis, used only for what's displayed ([Call.connectedAt]).
+     */
+    fun reduce(s: PhoneState, input: PhoneInput, now: Long, wallNow: Long = now): PhoneState =
+        reconcileIfDue(apply(s, input, now, wallNow), now, wallNow)
 
     /**
      * When a STATUS held back by [RECONCILE_GRACE_MS] will next need reconciling
      * (so a caller can schedule a [PhoneInput.Tick] then), or null if none is pending.
      */
     fun reconcileDueAt(s: PhoneState): Long? {
+        if (!s.linkUp) return null
         val sig = s.sig ?: return null
         return if (disagrees(s.activeCall, sig)) s.callChangedAt + RECONCILE_GRACE_MS else null
     }
 
-    private fun apply(s: PhoneState, input: PhoneInput, now: Long): PhoneState = when (input) {
-        is PhoneInput.Event -> event(s, input.event, now)
+    private fun apply(s: PhoneState, input: PhoneInput, now: Long, wallNow: Long): PhoneState = when (input) {
+        is PhoneInput.Event -> event(s, input.event, now, wallNow)
         is PhoneInput.Status -> s.copy(
             sig = input.sig,
             regFailureCode = if (input.sig == SigState.REGISTERING) s.regFailureCode else null,
         )
-        is PhoneInput.Resync -> resync(s, input, now)
+        is PhoneInput.Resync -> resync(s, input, now, wallNow)
         is PhoneInput.Tick -> s
         PhoneInput.LinkDown -> s.copy(linkUp = false)
-        is PhoneInput.Activating -> s.copy(activation = Activation.InProgress(input.number), notice = null)
+        PhoneInput.LinkUp -> s.copy(linkUp = true)
+        PhoneInput.LinkClosed -> {
+            val c = s.activeCall
+            s.copy(
+                linkUp = false,
+                sig = null,
+                call = c?.copy(phase = CallPhase.ENDED, causeCode = null, answering = false) ?: s.call,
+                callChangedAt = if (c != null) now else s.callChangedAt,
+            )
+        }
+        is PhoneInput.Activating -> s.copy(sig = SigState.ACTIVATING, activation = Activation.InProgress(input.number), notice = null)
         is PhoneInput.Dialled -> s.copy(
             sig = SigState.CALLING,
             call = Call(null, Direction.OUTGOING, input.number, CallPhase.CALLING),
@@ -182,11 +221,11 @@ object PhoneReducer {
             s.copy(sig = SigState.RELEASING, call = it.copy(phase = CallPhase.RELEASING), callChangedAt = now)
         } ?: s
         is PhoneInput.Notice -> s.copy(notice = input.text)
-        PhoneInput.DismissCall -> if (s.call?.phase == CallPhase.ENDED) s.copy(call = null) else s
+        PhoneInput.DismissCall -> if (s.call?.phase == CallPhase.ENDED || !s.linkUp) s.copy(call = null) else s
         PhoneInput.ClearActivation -> if (s.activation is Activation.InProgress) s else s.copy(activation = Activation.Idle)
     }
 
-    private fun event(s: PhoneState, e: TerminalEvent, now: Long): PhoneState = when (e) {
+    private fun event(s: PhoneState, e: TerminalEvent, now: Long, wallNow: Long): PhoneState = when (e) {
         is TerminalEvent.Activated -> s.copy(
             number = e.number,
             activation = Activation.Succeeded(e.number),
@@ -219,8 +258,8 @@ object PhoneReducer {
             val c = s.activeCall
             s.copy(
                 sig = SigState.IN_CALL,
-                call = c?.copy(id = e.callId, phase = CallPhase.CONNECTED, answering = false, connectedAt = now)
-                    ?: Call(e.callId, null, null, CallPhase.CONNECTED, connectedAt = now),
+                call = c?.copy(id = e.callId, phase = CallPhase.CONNECTED, answering = false, connectedAt = wallNow)
+                    ?: Call(e.callId, null, null, CallPhase.CONNECTED, connectedAt = wallNow),
                 callChangedAt = now,
             )
         }
@@ -246,7 +285,7 @@ object PhoneReducer {
         is TerminalEvent.Unknown -> s
     }
 
-    private fun resync(s: PhoneState, r: PhoneInput.Resync, now: Long): PhoneState {
+    private fun resync(s: PhoneState, r: PhoneInput.Resync, now: Long, wallNow: Long): PhoneState {
         var t = s.copy(
             linkUp = true,
             sig = r.sig,
@@ -262,7 +301,7 @@ object PhoneReducer {
             r.sig != SigState.ACTIVATING && t.activation is Activation.InProgress -> t.copy(activation = Activation.Interrupted)
             else -> t
         }
-        val reconciled = reconcileCall(t, r.sig, now)
+        val reconciled = reconcileCall(t, r.sig, now, wallNow)
         // The terminal doesn't queue EVENTs while no phone is connected: a call still ringing-in
         // across a resync might not be the same one the app saw before, so its id and caller
         // (if any) can no longer be trusted. Dropping them also lets a later ENDED for a call the
@@ -276,13 +315,15 @@ object PhoneReducer {
     }
 
     /** If a STATUS was held back by [RECONCILE_GRACE_MS] and that grace has now elapsed, reconcile the call against it. */
-    private fun reconcileIfDue(s: PhoneState, now: Long): PhoneState {
+    private fun reconcileIfDue(s: PhoneState, now: Long, wallNow: Long): PhoneState {
+        // While the link is down the stored STATUS is from a link that's gone: the Resync on reconnect corrects everything.
+        if (!s.linkUp) return s
         val sig = s.sig ?: return s
         if (now - s.callChangedAt < RECONCILE_GRACE_MS) return s
-        return reconcileCall(s, sig, now)
+        return reconcileCall(s, sig, now, wallNow)
     }
 
-    private fun reconcileCall(s: PhoneState, sig: SigState, now: Long): PhoneState {
+    private fun reconcileCall(s: PhoneState, sig: SigState, now: Long, wallNow: Long): PhoneState {
         val c = s.activeCall
         if (!disagrees(c, sig)) return s
         if (!sig.hasCall) {
@@ -300,13 +341,17 @@ object PhoneReducer {
                     },
                     peer = null,
                     phase = phase,
-                    connectedAt = if (phase == CallPhase.CONNECTED) now else null,
+                    connectedAt = if (phase == CallPhase.CONNECTED) wallNow else null,
                 ),
                 callChangedAt = now,
             )
         } else {
             s.copy(
-                call = c.copy(phase = phase, connectedAt = c.connectedAt ?: if (phase == CallPhase.CONNECTED) now else null),
+                call = c.copy(
+                    phase = phase,
+                    answering = c.answering && phase == CallPhase.INCOMING,
+                    connectedAt = c.connectedAt ?: if (phase == CallPhase.CONNECTED) wallNow else null,
+                ),
                 callChangedAt = now,
             )
         }

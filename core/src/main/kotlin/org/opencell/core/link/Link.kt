@@ -29,6 +29,12 @@ interface TerminalLink {
     /** Every EVENT notification, decoded. Hot; the terminal doesn't queue events while no phone is connected. */
     val events: SharedFlow<TerminalEvent>
 
+    /**
+     * Every EVENT and STATUS notification, in the order they arrived, for a consumer whose
+     * state depends on both (the phone). STATUS reads ([refreshStatus]) aren't in it. Hot.
+     */
+    val inputs: SharedFlow<LinkInput>
+
     /** One write attempt to UP. No retries here: see [UplinkSender]. */
     suspend fun writeUp(payload: ByteArray): WriteResult
 
@@ -37,6 +43,13 @@ interface TerminalLink {
 
     /** Reads STATUS now. Returns null when not connected or the read failed. */
     suspend fun refreshStatus(): TerminalStatus?
+}
+
+/** One notification from the terminal, as it arrived: see [TerminalLink.inputs]. */
+sealed interface LinkInput {
+    data class Event(val event: TerminalEvent) : LinkInput
+
+    data class Status(val status: TerminalStatus) : LinkInput
 }
 
 /** Which terminal to talk to. [address] is the BLE MAC (or a simulator id). */
