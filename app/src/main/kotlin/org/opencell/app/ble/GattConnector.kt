@@ -26,6 +26,9 @@ import org.opencell.core.link.Connection
 import org.opencell.core.link.ConnectionEvents
 import org.opencell.core.link.Connector
 import org.opencell.core.link.LinkTarget
+import org.opencell.core.link.PairingException
+import org.opencell.core.link.PairingProblem
+import org.opencell.core.link.PairingRules
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.GattContract
 import java.util.UUID
@@ -38,8 +41,9 @@ private const val TAG = "OpenCellGatt"
 
 /**
  * Opens [GattConnection]s to terminals by MAC address. This is the one place
- * the app connects over GATT: BLE pairing/bonding, if the terminal starts to
- * require it, goes here and in [GattConnection.open].
+ * the app connects over GATT, and where it pairs (bonds) with the terminal:
+ * see [GattConnection.open]. A [PairingException] from [connect] means the
+ * user must act (retry, or forget a stale bond in Bluetooth settings).
  *
  * It follows the Bluetooth adapter for as long as it lives (the process):
  * Android cleans up GATT clients without any callback when Bluetooth turns
@@ -97,7 +101,8 @@ class GattConnector(
     }
 }
 
-internal class GattException(message: String) : Exception(message)
+/** A GATT failure; [status] is the GATT/HCI status behind it when there was one (0 otherwise). */
+internal class GattException(message: String, val status: Int = 0) : Exception(message)
 
 /**
  * One GATT client connection to a terminal.
@@ -107,6 +112,13 @@ internal class GattException(message: String) : Exception(message)
  * serializes them and a [CompletableDeferred] carries the callback's result
  * back to the suspended caller. An operation that never completes is treated
  * as a dead link: the connection is closed and reported as dropped.
+ *
+ * The terminal refuses every characteristic and CCCD (ATT 0x05) until the
+ * link is encrypted with a passkey-authenticated key, so [open] bonds first
+ * when the phone has no bond ([Bonder]; Android shows its passkey dialog).
+ * A bonded phone re-encrypts without a code. If the terminal has since
+ * cleared its bonds, setup fails with an auth status and [open] throws
+ * [PairingException] with [PairingProblem.STALE_BOND].
  *
  * Both callback APIs are handled: Android 13+ passes values to
  * `onCharacteristicChanged/Read(..., value)` and takes values in
@@ -133,6 +145,10 @@ internal class GattConnection(
 
     @Volatile
     private var gatt: BluetoothGatt? = null
+
+    @Volatile
+    private var bonder: Bonder? = null
+    private var bondedAtStart = false
     private lateinit var up: BluetoothGattCharacteristic
     private lateinit var status: BluetoothGattCharacteristic
     private lateinit var command: BluetoothGattCharacteristic
@@ -148,9 +164,9 @@ internal class GattConnection(
                 newState == BluetoothProfile.STATE_CONNECTED && statusCode == BluetoothGatt.GATT_SUCCESS ->
                     connected.complete(Unit)
                 newState == BluetoothProfile.STATE_DISCONNECTED ->
-                    dropped("disconnected (${gattStatusName(statusCode)})")
+                    dropped("disconnected (${gattStatusName(statusCode)})", statusCode)
                 statusCode != BluetoothGatt.GATT_SUCCESS ->
-                    dropped("connection error (${gattStatusName(statusCode)})")
+                    dropped("connection error (${gattStatusName(statusCode)})", statusCode)
             }
         }
 
@@ -192,7 +208,10 @@ internal class GattConnection(
         }
     }
 
-    /** Connects, requests a larger MTU, discovers services and enables DOWN, STATUS and EVENT notifications. */
+    /**
+     * Connects, bonds if the phone has no bond yet, requests a larger MTU,
+     * discovers services and enables DOWN, STATUS and EVENT notifications.
+     */
     suspend fun open() {
         // Deprecated in API 37 in favour of connectGatt(BluetoothGattConnectionSettings, ...),
         // which the Fold 7 (API 36) doesn't have.
@@ -210,6 +229,53 @@ internal class GattConnection(
         withTimeoutOrNull(CONNECT_TIMEOUT) { connected.await() }
             ?: throw GattException("connect timed out")
 
+        bondedAtStart = device.bondState == BluetoothDevice.BOND_BONDED
+        if (!bondedAtStart) bond()
+        try {
+            setUp()
+        } catch (e: GattException) {
+            // A refused CCCD write, or the link dropping while the phone re-encrypts
+            // with a key the terminal no longer has, is about pairing, not the radio.
+            val problem = PairingRules.classify(e.status, bondedAtStart) ?: throw e
+            throw PairingException(problem, pairingMessage(problem, e.message))
+        }
+    }
+
+    /** Asks Android to bond (its dialog takes the code from the terminal's OLED) and waits. */
+    private suspend fun bond() {
+        events.onPairing()
+        val b = Bonder(context, device)
+        bonder = b
+        if (closed.get()) b.abort() // dropped before bonder was set
+        val result = try {
+            b.bond(BOND_TIMEOUT)
+        } finally {
+            bonder = null
+        }
+        // Bluetooth turning off ends the bond too (LINK_LOST from dropped(), or NONE from the
+        // stack tearing down, in either order): that is link loss, not a failed pairing, so
+        // LinkManager reconnects when Bluetooth is back instead of waiting for the user.
+        if (result != BondResult.BONDED && !bluetoothOn()) throw GattException("Bluetooth turned off while pairing")
+        val failure = when (result) {
+            BondResult.BONDED -> null
+            BondResult.NOT_STARTED -> "pairing could not start"
+            BondResult.FAILED -> "pairing failed or was cancelled (a wrong code also changes the terminal's code)"
+            BondResult.TIMED_OUT -> "pairing timed out"
+            BondResult.LINK_LOST -> "the terminal dropped the link while pairing (after 3 wrong codes it refuses for 60 s)"
+        }
+        if (failure != null) throw PairingException(PairingProblem.FAILED, failure)
+        Log.i(TAG, "bonded: ${device.address}")
+    }
+
+    private fun bluetoothOn() = context.getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
+
+    private fun pairingMessage(problem: PairingProblem, detail: String?) = when (problem) {
+        PairingProblem.STALE_BOND ->
+            "the terminal no longer knows this phone ($detail): forget it in Bluetooth settings, then connect again"
+        PairingProblem.FAILED -> "the terminal refused the link after pairing ($detail)"
+    }
+
+    private suspend fun setUp() {
         // Lets ACTIVATE (up to 121 bytes) go in one write; with the default MTU of 23
         // Android falls back to a long (prepared) write, which the terminal also takes.
         // Optional: if it can't start or never answers, carry on with 23.
@@ -223,7 +289,9 @@ internal class GattConnection(
         if (m?.status == BluetoothGatt.GATT_SUCCESS) mtu = m.mtu
 
         val d = op(Kind.DISCOVER, DISCOVERY_TIMEOUT) { it.discoverServices() }
-        if (d.status != BluetoothGatt.GATT_SUCCESS) throw GattException("service discovery failed (${gattStatusName(d.status)})")
+        if (d.status != BluetoothGatt.GATT_SUCCESS) {
+            throw GattException("service discovery failed (${gattStatusName(d.status)})", d.status)
+        }
         val service = gatt?.getService(GattContract.SERVICE) ?: throw GattException("not an OpenCell terminal (service missing)")
         up = service.getCharacteristic(GattContract.UP) ?: throw GattException("UP characteristic missing")
         status = service.getCharacteristic(GattContract.STATUS) ?: throw GattException("STATUS characteristic missing")
@@ -320,7 +388,9 @@ internal class GattConnection(
                 it.writeDescriptor(cccd)
             }
         }
-        if (r.status != BluetoothGatt.GATT_SUCCESS) throw GattException("enabling notifications failed (${gattStatusName(r.status)})")
+        if (r.status != BluetoothGatt.GATT_SUCCESS) {
+            throw GattException("enabling notifications failed (${gattStatusName(r.status)})", r.status)
+        }
     }
 
     /**
@@ -357,8 +427,8 @@ internal class GattConnection(
         if (p != null && p.kind == kind) p.result.complete(r) else Log.w(TAG, "unexpected $kind callback")
     }
 
-    private fun failPending(reason: String) {
-        pending.getAndSet(null)?.result?.completeExceptionally(GattException(reason))
+    private fun failPending(reason: String, status: Int = 0) {
+        pending.getAndSet(null)?.result?.completeExceptionally(GattException(reason, status))
     }
 
     private fun notified(uuid: UUID, value: ByteArray) {
@@ -374,11 +444,12 @@ internal class GattConnection(
      * The link went away (or an op hung, or Bluetooth turned off: [GattConnector]
      * calls this then): release the GATT client and report it once.
      */
-    fun dropped(reason: String) {
+    fun dropped(reason: String, status: Int = 0) {
         Log.i(TAG, "dropped: $reason")
-        connected.completeExceptionally(GattException(reason))
+        connected.completeExceptionally(GattException(reason, status))
+        bonder?.abort()
         if (closed.compareAndSet(false, true)) {
-            failPending(reason)
+            failPending(reason, status)
             gatt?.close()
             if (ready.get()) events.onClosed(reason)
         }
@@ -388,6 +459,7 @@ internal class GattConnection(
         private const val REQUESTED_MTU = 247
         private const val LEGACY_START_FAILED = -2
         private val CONNECT_TIMEOUT = 15.seconds
+        private val BOND_TIMEOUT = 60.seconds // the user reads the code off the terminal and types it
         private val DISCOVERY_TIMEOUT = 10.seconds
         private val OP_TIMEOUT = 5.seconds
         private val MTU_TIMEOUT = 3.seconds
@@ -409,11 +481,15 @@ internal class GattConnection(
 
         fun gattStatusName(status: Int) = when (status) {
             BluetoothGatt.GATT_SUCCESS -> "success"
+            0x05 -> "0x05 insufficient authentication"
+            0x06 -> "0x06 key missing"
             0x08 -> "0x08 supervision timeout"
             0x13 -> "0x13 remote closed"
             0x16 -> "0x16 local host closed"
             0x3E -> "0x3E failed to establish"
             GattContract.ATT_ERR_INVALID_LENGTH -> "0x0D invalid length"
+            GattContract.ATT_ERR_INSUFFICIENT_ENCRYPTION -> "0x0F insufficient encryption"
+            PairingRules.GATT_AUTH_FAIL -> "0x89 authentication failed"
             GattContract.ATT_ERR_NOT_NOW -> "0x80 not now"
             GattContract.ATT_ERR_BAD_ARG -> "0x81 bad argument"
             133 -> "133 GATT_ERROR"

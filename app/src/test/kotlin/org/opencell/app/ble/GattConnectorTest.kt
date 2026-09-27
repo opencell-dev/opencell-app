@@ -2,6 +2,7 @@ package org.opencell.app.ble
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
@@ -13,9 +14,13 @@ import android.content.Intent
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -25,6 +30,8 @@ import org.opencell.core.link.ConnectException
 import org.opencell.core.link.Connection
 import org.opencell.core.link.ConnectionEvents
 import org.opencell.core.link.LinkTarget
+import org.opencell.core.link.PairingException
+import org.opencell.core.link.PairingProblem
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.GattContract
@@ -32,12 +39,15 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.annotation.RealObject
 import org.robolectric.shadows.ShadowBluetoothGatt
 
 /**
  * [GattConnector] follows the adapter: Bluetooth turning off drops the live
  * connection the way a disconnect does (Android itself says nothing on the
- * GATT client), and turning back on asks for a reconnect.
+ * GATT client), and turning back on asks for a reconnect. It bonds before
+ * GATT setup when the phone has no bond, and turns auth refusals during setup
+ * into [PairingException]s; Bluetooth turning off mid-pairing is link loss.
  */
 @RunWith(AndroidJUnit4::class)
 class GattConnectorTest {
@@ -45,6 +55,7 @@ class GattConnectorTest {
     private val adapter get() = app.getSystemService(BluetoothManager::class.java).adapter
     private val closedReasons = mutableListOf<String>()
     private var bluetoothOn = 0
+    private var pairing = 0
     private var gatt: BluetoothGatt? = null
 
     /** Bluetooth turns off inside connectGatt, before open() has the client in hand. */
@@ -54,6 +65,9 @@ class GattConnectorTest {
         override fun onDownlink(payload: ByteArray) = Unit
         override fun onStatus(raw: ByteArray) = Unit
         override fun onEvent(raw: ByteArray) = Unit
+        override fun onPairing() {
+            pairing++
+        }
         override fun onClosed(reason: String) {
             closedReasons += reason
         }
@@ -64,6 +78,7 @@ class GattConnectorTest {
         shadowOf(app).grantPermissions(Manifest.permission.BLUETOOTH_CONNECT)
         shadowOf(adapter).setEnabled(true)
         val device = adapter.getRemoteDevice(ADDRESS)
+        shadowOf(device).setBondState(BluetoothDevice.BOND_BONDED) // unless a test pairs
         shadowOf(device).setGattConnectionInterceptor { g ->
             gatt = g
             if (turnOffDuringConnectGatt) adapterState(BluetoothAdapter.STATE_TURNING_OFF)
@@ -77,6 +92,7 @@ class GattConnectorTest {
     @After
     fun tearDown() {
         ServiceNotBoundGatt.notBound = false
+        AuthRefusingGatt.refuseWith = 0
     }
 
     private fun connect(): Pair<GattConnector, Connection> {
@@ -86,6 +102,24 @@ class GattConnectorTest {
 
     private fun adapterState(state: Int) {
         app.sendBroadcast(Intent(BluetoothAdapter.ACTION_STATE_CHANGED).putExtra(BluetoothAdapter.EXTRA_STATE, state))
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    /** The phone has no bond; createBond() starts one, which then ends as [bondStates] say. */
+    private fun unbonded() {
+        val device = adapter.getRemoteDevice(ADDRESS)
+        shadowOf(device).setBondState(BluetoothDevice.BOND_NONE)
+        shadowOf(device).setCreatedBond(true)
+    }
+
+    private fun bondState(state: Int) {
+        val device = adapter.getRemoteDevice(ADDRESS)
+        shadowOf(device).setBondState(state)
+        app.sendBroadcast(
+            Intent(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+                .putExtra(BluetoothDevice.EXTRA_DEVICE, device)
+                .putExtra(BluetoothDevice.EXTRA_BOND_STATE, state),
+        )
         shadowOf(Looper.getMainLooper()).idle()
     }
 
@@ -148,6 +182,94 @@ class GattConnectorTest {
         assertTrue(shadowOf(gatt).isClosed)
     }
 
+    @Test
+    fun aPhoneWithoutABondPairsBeforeSettingUp() = runTest {
+        unbonded()
+        val connector = GattConnector(app)
+        val c = async { connector.connect(LinkTarget(ADDRESS, null), events) }
+        runCurrent()
+        assertEquals(1, pairing)
+        assertFalse("waits for the user to type the code", c.isCompleted)
+        bondState(BluetoothDevice.BOND_BONDING)
+        bondState(BluetoothDevice.BOND_BONDED)
+        assertEquals(WriteResult.Accepted, c.await().writeCommand(Command.Reject.encode()))
+    }
+
+    @Test
+    fun aBondedPhoneDoesNotPair() {
+        connect()
+        assertEquals(0, pairing)
+    }
+
+    @Test
+    fun aCancelledPairingIsAPairingFailure() = runTest {
+        unbonded()
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        bondState(BluetoothDevice.BOND_NONE)
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue(shadowOf(gatt).isClosed)
+    }
+
+    /** Not a failed pairing: LinkManager must retry (once Bluetooth is back), not wait for the user. */
+    @Test
+    fun bluetoothTurningOffWhilePairingIsALinkLoss() = runTest {
+        unbonded()
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        shadowOf(adapter).setEnabled(false)
+        adapterState(BluetoothAdapter.STATE_TURNING_OFF)
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is ConnectException)
+        assertTrue(shadowOf(gatt).isClosed)
+        assertTrue("never ready, so no onClosed", closedReasons.isEmpty())
+    }
+
+    /** The stack tearing down may end the bond (NONE) before TURNING_OFF reaches us. */
+    @Test
+    fun aBondEndedByBluetoothTurningOffIsALinkLoss() = runTest {
+        unbonded()
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        shadowOf(adapter).setEnabled(false)
+        bondState(BluetoothDevice.BOND_NONE)
+        adapterState(BluetoothAdapter.STATE_TURNING_OFF)
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is ConnectException)
+        assertTrue(shadowOf(gatt).isClosed)
+    }
+
+    @Test
+    @Config(shadows = [AuthRefusingGatt::class])
+    fun anAuthRefusalWithAnOldBondIsAStaleBond() {
+        AuthRefusingGatt.refuseWith = GattContract.ATT_ERR_INSUFFICIENT_AUTHENTICATION
+        val e = runCatching { connect() }.exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.STALE_BOND)
+        assertEquals(0, pairing)
+        assertTrue(shadowOf(gatt).isClosed)
+    }
+
+    @Test
+    @Config(shadows = [AuthRefusingGatt::class])
+    fun anAuthRefusalRightAfterPairingIsAFailedPairing() = runTest {
+        unbonded()
+        AuthRefusingGatt.refuseWith = GattContract.ATT_ERR_INSUFFICIENT_ENCRYPTION
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        bondState(BluetoothDevice.BOND_BONDED)
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+    }
+
+    @Test
+    @Config(shadows = [AuthRefusingGatt::class])
+    fun otherSetupFailuresAreNotAboutPairing() {
+        AuthRefusingGatt.refuseWith = GattContract.ATT_ERR_NOT_NOW
+        val e = runCatching { connect() }.exceptionOrNull()
+        assertTrue("$e", e is ConnectException)
+    }
+
     private fun terminalService() = BluetoothGattService(GattContract.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
         val write = BluetoothGattCharacteristic.PROPERTY_WRITE
         val notify = BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_READ
@@ -182,5 +304,24 @@ class ServiceNotBoundGatt : ShadowBluetoothGatt() {
     companion object {
         @Volatile
         var notBound = false
+    }
+}
+
+/** [ShadowBluetoothGatt] whose CCCD writes the terminal can answer with an ATT error ([refuseWith], 0 = accept). */
+@Implements(BluetoothGatt::class)
+class AuthRefusingGatt : ShadowBluetoothGatt() {
+    @RealObject
+    private lateinit var real: BluetoothGatt
+
+    @Implementation(minSdk = 33)
+    override fun writeDescriptor(d: BluetoothGattDescriptor, value: ByteArray): Int {
+        if (refuseWith == 0) return super.writeDescriptor(d, value)
+        gattCallback.onDescriptorWrite(real, d, refuseWith)
+        return BluetoothStatusCodes.SUCCESS
+    }
+
+    companion object {
+        @Volatile
+        var refuseWith = 0
     }
 }
