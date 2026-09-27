@@ -3,42 +3,67 @@ package org.opencell.core.protocol
 import java.util.UUID
 
 /**
- * The terminal's BLE GATT contract, mirrored from
- * `firmware/components/lc_term/include/lc_term_gatt.h`.
+ * The terminal's BLE GATT contract v2, mirrored from
+ * `firmware/components/lc_term/include/lc_term_gatt.h` and the constants in
+ * `firmware/components/lc_sig/include/lc_sig.h` (branch `lc-sig`).
  *
- * Keep this file in sync with the header: it is the only place the app
+ * Keep this file in sync with those headers: it is the only place the app
  * hard-codes UUIDs, sizes and ATT error codes.
  */
 object GattContract {
     /** Primary service. Advertised as a complete 128-bit UUID list. */
     val SERVICE: UUID = uuid(0x01)
 
-    /** Write / write-without-response: one upper-layer payload per write. */
+    /** Write / write-without-response: one app data frame (at most [MAX_PAYLOAD] bytes) per write. */
     val UP: UUID = uuid(0x02)
 
-    /** Notify: one downlink payload per notification. */
+    /** Notify: one app data frame per notification. */
     val DOWN: UUID = uuid(0x03)
 
     /** Read / notify: [STATUS_LEN] bytes, decoded by [TerminalStatus.decode]. */
     val STATUS: UUID = uuid(0x04)
 
+    /** Write with response: `op (1) || args`, built by [Command.encode]. */
+    val COMMAND: UUID = uuid(0x05)
+
+    /** Notify: `ev (1) || args`, decoded by [TerminalEvent.decode]. */
+    val EVENT: UUID = uuid(0x06)
+
     /** Client Characteristic Configuration Descriptor (Bluetooth SIG). */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-    /** `LC_TERM_DATA_MAX_PAYLOAD`: largest UP payload, set by the 28-byte air slot. */
-    const val MAX_PAYLOAD = 20
-
-    /** `LC_TERM_RACH_MAX_PAYLOAD`: largest payload the terminal can send without a grant. */
-    const val RACH_MAX_PAYLOAD = 8
+    /** `LC_SIG_APP_MAX`: largest app data frame on UP and DOWN (contract v1 allowed 20). */
+    const val MAX_PAYLOAD = 18
 
     /** `LC_GATT_STATUS_LEN`. */
     const val STATUS_LEN = 20
 
-    /** `LC_GATT_ERR_NOT_NOW`: no grant yet / queue full. Retry later. */
+    /** `LC_GATT_STATUS_SIG`: the STATUS byte that holds the signalling state ([SigState]). */
+    const val STATUS_SIG = 3
+
+    /** `LC_GATT_COMMAND_MAX`: op byte plus 120 bytes of QR text. */
+    const val COMMAND_MAX = 121
+
+    /** Longest QR text ACTIVATE takes. */
+    const val QR_TEXT_MAX = 120
+
+    /** `LC_GATT_EVENT_MAX`. */
+    const val EVENT_MAX = 16
+
+    /** DEACTIVATE's confirmation byte. */
+    const val DEACTIVATE_CONFIRM = 0xA5
+
+    /**
+     * ATT 0x80. On UP: no grant, or the UL queue is full; retry later.
+     * On COMMAND: the terminal is not in the right state for it.
+     */
     const val ATT_ERR_NOT_NOW = 0x80
 
-    /** Invalid attribute value length: the payload was too long. Never retry. */
+    /** ATT 0x0D, invalid attribute value length: UP too long, or COMMAND of the wrong length. Never retry. */
     const val ATT_ERR_INVALID_LENGTH = 0x0D
+
+    /** ATT 0x81 (`LC_SIG_ATT_BAD_ARG`): a malformed COMMAND argument (QR text, number, confirmation byte). */
+    const val ATT_ERR_BAD_ARG = 0x81
 
     /** The terminal's device name prefix; the rest is the TMID in hex. */
     const val NAME_PREFIX = "OpenCell-"

@@ -22,7 +22,6 @@ import org.opencell.core.link.UplinkSender
 import org.opencell.core.loopback.LoopbackConfig
 import org.opencell.core.loopback.LoopbackReport
 import org.opencell.core.loopback.LoopbackRunner
-import org.opencell.core.protocol.PayloadRules
 import org.opencell.core.protocol.TerminalState
 import kotlin.time.TimeSource
 
@@ -82,14 +81,7 @@ class TerminalSession(
     fun send(payload: ByteArray, enforceLimit: Boolean = true): Job = scope.launch {
         val outcome = sender.send(payload, enforceLimit)
         val kind = if (outcome is SendOutcome.Sent) ConsoleKind.UP else ConsoleKind.ERROR
-        val note = if (outcome is SendOutcome.Sent && !PayloadRules.fitsRach(payload.size) &&
-            link.status.value?.state == TerminalState.IDLE
-        ) {
-            " (IDLE: payloads over 8 bytes wait for a grant)"
-        } else {
-            ""
-        }
-        console.add(kind, "UP ${payload.size} B: ${outcome.label}$note", payload)
+        console.add(kind, "UP ${payload.size} B: ${outcome.label}", payload)
     }
 
     fun refreshStatus(): Job = scope.launch {

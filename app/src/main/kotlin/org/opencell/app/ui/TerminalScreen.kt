@@ -353,6 +353,7 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
                     Spacer(Modifier.padding(2.dp))
                     InfoRow("Band", s.bandLabel)
                     InfoRow("Tier", s.tierLabel)
+                    InfoRow("Signalling", s.sigLabel)
                     InfoRow("RSSI", "${s.rssiDbm} dBm")
                     InfoRow("SNR", if (s.snrQuarterDb == 0 && s.band?.code == 1) "– (FLRC)" else "%.2f dB".format(s.snrDb))
                     InfoRow("TMID", s.tmidHex)
@@ -370,9 +371,8 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
 
         if (!compact) {
             Text(
-                "UP takes one payload of up to ${GattContract.MAX_PAYLOAD} bytes per write; the terminal sends one per " +
-                    "${GattContract.FRAME_MILLIS} ms frame (about 1.3 kbit/s). In IDLE only payloads up to " +
-                    "${GattContract.RACH_MAX_PAYLOAD} bytes go out (over RACH).",
+                "UP takes one app data frame of up to ${GattContract.MAX_PAYLOAD} bytes per write; the terminal sends " +
+                    "one per ${GattContract.FRAME_MILLIS} ms frame, and only while it holds a grant (0x80 otherwise).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

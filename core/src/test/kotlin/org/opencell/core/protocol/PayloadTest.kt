@@ -2,32 +2,25 @@ package org.opencell.core.protocol
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PayloadTest {
     @Test
-    fun limitIsTwentyBytes() {
+    fun limitIsEighteenBytes() {
         assertEquals(PayloadCheck.Ok, PayloadRules.check(ByteArray(1)))
-        assertEquals(PayloadCheck.Ok, PayloadRules.check(ByteArray(20)))
-        assertEquals(PayloadCheck.TooLong(21), PayloadRules.check(ByteArray(21)))
+        assertEquals(PayloadCheck.Ok, PayloadRules.check(ByteArray(18)))
+        assertEquals(PayloadCheck.TooLong(19), PayloadRules.check(ByteArray(19)))
         assertEquals(PayloadCheck.Empty, PayloadRules.check(ByteArray(0)))
         assertEquals(GattContract.MAX_PAYLOAD, (PayloadRules.check(ByteArray(64)) as PayloadCheck.TooLong).max)
     }
 
     @Test
     fun textIsCountedInUtf8Bytes() {
-        // 11 characters but 22 bytes: too long although it "looks" short.
-        val text = "α".repeat(11)
-        assertEquals(11, text.length)
-        assertEquals(PayloadCheck.TooLong(22), PayloadRules.check(text.encodeToByteArray()))
-    }
-
-    @Test
-    fun rachLimitIsEightBytes() {
-        assertTrue(PayloadRules.fitsRach(8))
-        assertFalse(PayloadRules.fitsRach(9))
+        // 10 characters but 20 bytes: too long although it "looks" short.
+        val text = "α".repeat(10)
+        assertEquals(10, text.length)
+        assertEquals(PayloadCheck.TooLong(20), PayloadRules.check(text.encodeToByteArray()))
     }
 
     @Test
@@ -72,5 +65,7 @@ class PayloadTest {
         assertEquals("6c630002-7e2a-4b8e-9f2d-3c1a5e7b0d10", GattContract.UP.toString())
         assertEquals("6c630003-7e2a-4b8e-9f2d-3c1a5e7b0d10", GattContract.DOWN.toString())
         assertEquals("6c630004-7e2a-4b8e-9f2d-3c1a5e7b0d10", GattContract.STATUS.toString())
+        assertEquals("6c630005-7e2a-4b8e-9f2d-3c1a5e7b0d10", GattContract.COMMAND.toString())
+        assertEquals("6c630006-7e2a-4b8e-9f2d-3c1a5e7b0d10", GattContract.EVENT.toString())
     }
 }

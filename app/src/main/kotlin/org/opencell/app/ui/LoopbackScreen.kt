@@ -38,8 +38,6 @@ import org.opencell.app.ui.theme.MonoStyle
 import org.opencell.core.loopback.LoopbackStats
 import org.opencell.core.loopback.ProbeOutcome
 import org.opencell.core.loopback.ProbeResult
-import org.opencell.core.protocol.GattContract
-import org.opencell.core.protocol.PayloadRules
 
 /**
  * The bench loopback test: N writes at a fixed interval, each echoed by a
@@ -124,13 +122,12 @@ private fun LoopbackForm(vm: MainViewModel, running: Boolean, connected: Boolean
             if (cfg != null && problem == null) {
                 val probe = cfg.payloadFor(0)
                 Text("First probe: \"${probe.decodeToString()}\" (${probe.size} B)", style = MonoStyle)
-                if (!PayloadRules.fitsRach(probe.size)) {
-                    Text(
-                        "Over ${GattContract.RACH_MAX_PAYLOAD} bytes: needs the terminal in GRANTED (IDLE only sends up to 8 bytes over RACH).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    "Needs the terminal in GRANTED (UP is refused with 0x80 without a grant). " +
+                        "Outside a call that means a test cell (lcbench cell) that keeps it granted.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             (vm.loopError ?: problem)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (running) {

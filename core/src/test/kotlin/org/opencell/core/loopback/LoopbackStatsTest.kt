@@ -67,12 +67,13 @@ class LoopbackStatsTest {
         assertEquals("HELLO#ff", LoopbackConfig().payloadFor(255).decodeToString())
         assertEquals("HELLO#00", LoopbackConfig().payloadFor(256).decodeToString())
         assertEquals("HELLO", LoopbackConfig(tagSequence = false).payloadFor(3).decodeToString())
-        assertEquals(null, LoopbackConfig(payload = ByteArray(17)).problem())
+        assertEquals(null, LoopbackConfig(payload = ByteArray(15)).problem())
         assertEquals(
-            "Payload is 18 bytes; with the sequence tag the limit is 17",
-            LoopbackConfig(payload = ByteArray(18)).problem(),
+            "Payload is 16 bytes; with the sequence tag the limit is 15",
+            LoopbackConfig(payload = ByteArray(16)).problem(),
         )
-        assertEquals(null, LoopbackConfig(payload = ByteArray(20), tagSequence = false).problem())
+        assertEquals(null, LoopbackConfig(payload = ByteArray(18), tagSequence = false).problem())
+        assertEquals("Payload is 19 bytes; the limit is 18", LoopbackConfig(payload = ByteArray(19), tagSequence = false).problem())
         assertEquals("Count must be 1..10000", LoopbackConfig(count = 0).problem())
         assertEquals(
             "Interval must be at least 120 ms (one frame)",

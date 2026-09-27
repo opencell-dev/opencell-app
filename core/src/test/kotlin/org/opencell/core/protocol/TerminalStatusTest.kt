@@ -105,4 +105,27 @@ class TerminalStatusTest {
         val t = TerminalStatus(3, 1, 1, -120, -40, 0xDEADBEEFL, 0x80000000L, 1L)
         assertEquals(t, TerminalStatus.decode(t.encode()))
     }
+
+    /** Contract v2: byte 3 is lc_sig_state_t, 0 (not activated) to 8 (releasing). */
+    @Test
+    fun byteThreeIsTheSignallingState() {
+        assertEquals(SigState.NOT_ACTIVATED, TerminalStatus.decode(bench).sig)
+        for (st in SigState.entries) {
+            val raw = bench.copyOf().also { it[3] = st.code.toByte() }
+            val s = TerminalStatus.decode(raw)
+            assertEquals(st, s.sig)
+            assertEquals(st.code, s.encode()[GattContract.STATUS_SIG].toInt())
+        }
+        assertEquals(listOf(4, 5, 6, 7, 8), SigState.entries.filter { it.hasCall }.map { it.code })
+        val registered = bytes("04-00-02-03-cc-ff-32-00-88-04-ad-76-10-27-00-00-78-56-34-12")
+        assertEquals(SigState.REGISTERED, TerminalStatus.decode(registered).sig)
+        assertEquals("Registered", TerminalStatus.decode(registered).sigLabel)
+    }
+
+    @Test
+    fun unknownSignallingStateIsKept() {
+        val s = TerminalStatus.decode(bench.copyOf().also { it[3] = 9 })
+        assertNull(s.sig)
+        assertEquals("Unknown (9)", s.sigLabel)
+    }
 }

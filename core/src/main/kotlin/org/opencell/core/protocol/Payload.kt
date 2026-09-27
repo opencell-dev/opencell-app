@@ -25,12 +25,6 @@ object PayloadRules {
         payload.size > GattContract.MAX_PAYLOAD -> PayloadCheck.TooLong(payload.size)
         else -> PayloadCheck.Ok
     }
-
-    /**
-     * True if the terminal can send [size] bytes while merely attached
-     * (IDLE, no grant): those go out as RACH UPPER, limited to 8 bytes.
-     */
-    fun fitsRach(size: Int): Boolean = size <= GattContract.RACH_MAX_PAYLOAD
 }
 
 /** Hex parsing and formatting for the console. */

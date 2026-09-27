@@ -8,7 +8,7 @@ enum class TerminalState(val code: Int, val label: String, val description: Stri
     SEARCH(0, "Search", "Looking for a cell's sync beacon"),
     SYNCED(1, "Synced", "Tracking frame timing, waiting to attach"),
     ATTACHING(2, "Attaching", "RACH attach sent, waiting for a grant"),
-    IDLE(3, "Idle", "Attached, no slots (short payloads go over RACH)"),
+    IDLE(3, "Idle", "Attached, no slots (UP is refused until a grant)"),
     GRANTED(4, "Granted", "DL/UL slots running every frame");
 
     companion object {
@@ -38,10 +38,33 @@ enum class Tier(val code: Int, val label: String) {
 }
 
 /**
+ * `lc_sig_state_t`, STATUS byte 3: what the terminal's signalling is doing.
+ * The terminal runs activation, registration and calls; the app only shows this.
+ */
+enum class SigState(val code: Int, val label: String) {
+    NOT_ACTIVATED(0, "Not activated"),
+    ACTIVATING(1, "Activating"),
+    REGISTERING(2, "Registering"),
+    REGISTERED(3, "Registered"),
+    CALLING(4, "Calling"),
+    RINGING_OUT(5, "Ringing"),
+    RINGING_IN(6, "Incoming call"),
+    IN_CALL(7, "In call"),
+    RELEASING(8, "Ending call");
+
+    /** True from CALLING to RELEASING: a call exists on the terminal. */
+    val hasCall: Boolean get() = code >= CALLING.code
+
+    companion object {
+        fun fromCode(code: Int): SigState? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/**
  * One decoded STATUS characteristic value (20 bytes, little-endian):
  *
  * ```
- *  0 u8  state      1 u8 band      2 u8 tier      3 u8 reserved
+ *  0 u8  state      1 u8 band      2 u8 tier      3 u8 signalling state (SigState)
  *  4 i16 rssi_dbm   6 i16 snr_qdb (0.25 dB; 0 on FLRC links)
  *  8 u32 tmid      12 u32 frame   16 u32 cell_seed
  * ```
@@ -59,8 +82,11 @@ data class TerminalStatus(
     val tmid: Long,
     val frame: Long,
     val cellSeed: Long,
+    /** STATUS byte 3 ([SigState]); contract v1 firmware sent 0 here. */
+    val sigCode: Int = 0,
 ) {
     val state: TerminalState? get() = TerminalState.fromCode(stateCode)
+    val sig: SigState? get() = SigState.fromCode(sigCode)
     val band: Band? get() = Band.fromCode(bandCode)
     val tier: Tier? get() = Tier.fromCode(tierCode)
 
@@ -70,6 +96,7 @@ data class TerminalStatus(
     val stateLabel: String get() = state?.label ?: "Unknown ($stateCode)"
     val bandLabel: String get() = band?.label ?: "Unknown ($bandCode)"
     val tierLabel: String get() = tier?.label ?: "Unknown ($tierCode)"
+    val sigLabel: String get() = sig?.label ?: "Unknown ($sigCode)"
     val tmidHex: String get() = Tmid.format(tmid)
 
     /** Packs this status exactly like `lc_term_pack_status()`. Used by the simulator and tests. */
@@ -78,7 +105,7 @@ data class TerminalStatus(
         buf.put(stateCode.toByte())
         buf.put(bandCode.toByte())
         buf.put(tierCode.toByte())
-        buf.put(0)
+        buf.put(sigCode.toByte())
         buf.putShort(rssiDbm.toShort())
         buf.putShort(snrQuarterDb.toShort())
         buf.putInt(tmid.toInt())
@@ -108,6 +135,7 @@ data class TerminalStatus(
                 tmid = buf.getInt(8).toLong() and 0xFFFF_FFFFL,
                 frame = buf.getInt(12).toLong() and 0xFFFF_FFFFL,
                 cellSeed = buf.getInt(16).toLong() and 0xFFFF_FFFFL,
+                sigCode = buf.get(GattContract.STATUS_SIG).toInt() and 0xFF,
             )
         }
 
