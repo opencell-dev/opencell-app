@@ -27,9 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.StateFlow
 import org.opencell.app.ui.theme.CallGreen
 import org.opencell.app.ui.theme.HangupRed
 import org.opencell.app.ui.theme.MonoStyle
+import org.opencell.core.link.LinkState
+import org.opencell.core.link.LinkTarget
+import org.opencell.core.link.PairingProblem
 import org.opencell.core.phone.Call
 import org.opencell.core.phone.CallData
 import org.opencell.core.phone.CallPhase
@@ -43,12 +47,19 @@ import org.opencell.core.protocol.PhoneNumber
  * not in this step: a connected call offers the data-frame test instead.
  * [onClose] closes an ended call, or any call while the link is down
  * ([PhoneSession.dismissCall] drops it then; the next resync restores it if
- * it is still up in the terminal).
+ * it is still up in the terminal). When the link ended in a pairing failure
+ * ([link]) it isn't reconnecting by itself, so [onRetry] is offered too.
  */
 @Composable
-fun CallScreen(session: PhoneSession, onClose: () -> Unit = session::dismissCall) {
+fun CallScreen(
+    session: PhoneSession,
+    link: StateFlow<LinkState>,
+    onRetry: (LinkTarget) -> Unit,
+    onClose: () -> Unit = session::dismissCall,
+) {
     val phone by session.state.collectAsStateWithLifecycle()
     val data by session.callData.collectAsStateWithLifecycle()
+    val linkState by link.collectAsStateWithLifecycle()
     val call = phone.call ?: return
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(
@@ -82,17 +93,34 @@ fun CallScreen(session: PhoneSession, onClose: () -> Unit = session::dismissCall
             }
             call.id?.let { Text("Call $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             val linkLost = !phone.linkUp && call.phase != CallPhase.ENDED
+            val pairingFailed = (linkState as? LinkState.PairingFailed)?.takeIf { linkLost }
             if (linkLost) {
                 Text(
-                    "The phone lost the terminal; reconnecting. The call goes on in the terminal. " +
-                        "Close hides it here; if it's still up when the terminal is back, it shows again.",
+                    when (pairingFailed?.problem) {
+                        null -> "The phone lost the terminal; reconnecting. The call goes on in the terminal. " +
+                            "Close hides it here; if it's still up when the terminal is back, it shows again."
+                        PairingProblem.FAILED -> "The terminal needs pairing again (${pairingFailed.reason}). " +
+                            "The call goes on in the terminal. Retry, then enter the code on the terminal's " +
+                            "Pairing screen; Close hides the call here."
+                        PairingProblem.STALE_BOND -> "The terminal needs pairing again: it no longer knows this " +
+                            "phone. Forget it in Bluetooth settings, then Retry. The call goes on in the terminal; " +
+                            "Close hides it here."
+                    },
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center,
                 )
             }
             Spacer(Modifier.height(8.dp))
-            // While the link is down the call's buttons can't reach the terminal: offer Close instead.
-            if (linkLost) OutlinedButton(onClick = onClose) { Text("Close") } else CallButtons(call, session, onClose)
+            // While the link is down the call's buttons can't reach the terminal: offer Close instead,
+            // and Retry when only the user can bring the link back (pairing failed: no automatic retry).
+            when {
+                pairingFailed != null -> Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    OutlinedButton(onClick = onClose) { Text("Close") }
+                    Button(onClick = { onRetry(pairingFailed.target) }) { Text("Retry") }
+                }
+                linkLost -> OutlinedButton(onClick = onClose) { Text("Close") }
+                else -> CallButtons(call, session, onClose)
+            }
             if (call.phase == CallPhase.CONNECTED) DataTest(data, onSend = { session.sendTestFrames() })
             phone.notice?.let { NoticeLine(it, onDismiss = session::clearNotice) }
         }

@@ -66,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.app.ui.theme.CallGreen
 import org.opencell.app.ui.theme.MonoStyle
 import org.opencell.core.link.LinkState
+import org.opencell.core.link.LinkTarget
 import org.opencell.core.phone.Activation
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.ActivationQr
@@ -83,6 +84,7 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     val link by vm.linkState.collectAsStateWithLifecycle()
     val wanted by vm.wanted.collectAsStateWithLifecycle()
     val phone by vm.phone.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     // Saveable: folding or unfolding recreates the activity, and must not close these.
     var menu by rememberSaveable { mutableStateOf(false) }
     var confirmDeactivate by rememberSaveable { mutableStateOf(false) }
@@ -117,7 +119,11 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
         ) {
             when {
                 wanted == null && !link.isConnected -> ConnectPrompt(vm, onOpenTerminal)
-                !phone.linkUp || phone.sig == null -> WaitingForTerminal(link)
+                !phone.linkUp || phone.sig == null -> WaitingForTerminal(
+                    link,
+                    onRetry = vm::connect,
+                    onBluetoothSettings = { context.startActivity(bluetoothSettings()) },
+                )
                 phone.activation != Activation.Idle -> ActivationResult(vm, phone)
                 phone.sig == SigState.NOT_ACTIVATED || vm.reactivating -> Onboarding(vm, again = phone.sig != SigState.NOT_ACTIVATED)
                 else -> Home(vm, phone)
@@ -158,7 +164,12 @@ private fun ConnectPrompt(vm: MainViewModel, onOpenTerminal: () -> Unit) {
 }
 
 @Composable
-private fun WaitingForTerminal(link: LinkState) {
+internal fun WaitingForTerminal(link: LinkState, onRetry: (LinkTarget) -> Unit, onBluetoothSettings: () -> Unit) {
+    if (link is LinkState.Pairing || link is LinkState.PairingFailed) {
+        // The user must act (type the code, or Retry): a spinner would say "just wait".
+        PairingNotice(link, onRetry, onBluetoothSettings)
+        return
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(12.dp))

@@ -13,6 +13,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.link.PairingProblem
 import org.robolectric.annotation.Config
 
 /** Dialer, outgoing, incoming and in-call screens against the demo terminal (spec §1 call flows). */
@@ -96,6 +97,23 @@ class CallScreensTest {
         // The call is still ringing in the terminal: the reconnect's resync shows it again.
         compose.waitForText("Incoming call")
         compose.onNodeWithText("Unknown caller").assertExists()
+    }
+
+    /** A link that ended in a pairing failure isn't "reconnecting": the call screen says pairing is needed and offers Retry. */
+    @Test
+    fun callScreenSaysTheTerminalNeedsPairingAgainAfterAPairingFailure() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        assertTrue(sim.incomingCall("+8836065550100"))
+        compose.waitForText("Incoming call")
+        sim.failNextConnect = PairingProblem.FAILED
+        sim.dropLink()
+        compose.waitForText("needs pairing again")
+        compose.onAllNodesWithText("reconnecting", substring = true).assertCountEquals(0)
+        compose.onNodeWithText("Close").assertExists()
+        compose.onNodeWithText("Retry").performClick()
+        // Paired again: the resync finds the call still ringing and its buttons come back.
+        compose.waitForText("Answer")
     }
 
     /** C1: Disconnect during a call (e.g. from the link notification) ends it on the phone; Close leaves the call screen. */

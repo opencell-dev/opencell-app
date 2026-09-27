@@ -52,7 +52,12 @@ class CallActivity : ComponentActivity() {
         }
         setContent {
             OpenCellTheme {
-                CallScreen(phone, onClose = { phone.dismissCall(); finish() })
+                CallScreen(
+                    phone,
+                    graph.session.link.state,
+                    onRetry = graph.repository::connect,
+                    onClose = { phone.dismissCall(); finish() },
+                )
             }
         }
     }

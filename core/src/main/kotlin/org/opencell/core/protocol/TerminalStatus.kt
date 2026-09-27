@@ -107,7 +107,17 @@ data class TerminalStatus(
      * otherwise show as a misleadingly strong "0 dBm". Every other state
      * always has a real reading (the terminal is synced to a cell).
      */
-    val signalLabel: String get() = if (state == TerminalState.SEARCH && rssiDbm == 0) "No signal" else "$rssiDbm dBm"
+    val signalLabel: String get() = if (noSignal) "No signal" else "$rssiDbm dBm"
+
+    private val noSignal: Boolean get() = state == TerminalState.SEARCH && rssiDbm == 0
+
+    /** [snrDb] for display: none with "No signal" ([signalLabel]), and none on FLRC links. */
+    val snrLabel: String
+        get() = when {
+            noSignal -> "–"
+            snrQuarterDb == 0 && band == Band.BAND_2G4 -> "– (FLRC)"
+            else -> "%.2f dB".format(snrDb)
+        }
 
     /** Packs this status exactly like `lc_term_pack_status()`. Used by the simulator and tests. */
     fun encode(): ByteArray {

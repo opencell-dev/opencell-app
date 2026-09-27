@@ -17,7 +17,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.link.LinkTarget
+import org.opencell.core.link.PairingProblem
 import org.opencell.core.protocol.RegFailReason
+import org.opencell.core.sim.SimulatedTerminal
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
@@ -42,6 +45,20 @@ class PhoneFlowTest {
         compose.onNodeWithText("Check code").performClick()
         compose.waitForText("Valid until")
         compose.onNodeWithText("Activate").performClick()
+    }
+
+    /**
+     * The service notification's "Pairing failed: open the app to retry" lands on the Phone
+     * tab: it must offer Retry there, not a spinner that never ends.
+     */
+    @Test
+    fun aFailedPairingOffersRetryOnThePhoneTab() {
+        compose.waitForText("No terminal connected")
+        compose.activity.graph.simulator.failNextConnect = PairingProblem.FAILED
+        compose.activity.graph.repository.connect(LinkTarget(SimulatedTerminal.ADDRESS, "Demo terminal"))
+        compose.waitForText("Pairing failed")
+        compose.onNodeWithText("Retry").performClick()
+        compose.waitForText("Activate your terminal")
     }
 
     @Test

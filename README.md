@@ -91,10 +91,12 @@ also do all of the following:
   the phone starts pairing. The code changes after every disconnect and every
   wrong try, and 3 wrong tries in a minute lock pairing for 60 s
   (`LOCKED 42S`). A paired phone reconnects without a code; the terminal keeps
-  up to 3 phones. A failed or cancelled pairing is not retried by itself (each
-  try costs one of the terminal's 3): tap **Retry**.
+  up to 3 phones, and pairing a 4th phone removes the oldest pairing. A failed
+  or cancelled pairing is not retried by itself (each try costs one of the
+  terminal's 3), not even when Android restarts the app: tap **Retry**.
 - **"The terminal forgot this phone."** Holding PRG for 5 s on the terminal's
-  Pairing screen clears its pairings, but the phone keeps its half. Tap
+  Pairing screen clears its pairings, and pairing a 4th phone removes the
+  oldest one; either way the phone keeps its half. Tap
   **Bluetooth settings**, open the terminal (`OpenCell-…`), choose **Forget**,
   then **Retry** and enter the new code. (Apps can't remove a pairing
   themselves.)
@@ -180,7 +182,7 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   see that screen can pair a phone. The app still lists every device that
   advertises the OpenCell service: pairing with the code on the screen in
   front of you is what proves it is your terminal. See `security-model.md`'s
-  "BLE hop (terminal ↔ phone)" section on the `ble-pair` branch.
+  "BLE hop (terminal ↔ phone)" section on the `terminal` branch.
 - **Voice isn't in this step.** A connected call has the data-frame test
   above, not audio; see Architecture below for where the codec plugs in.
 - The search counts only packets the radio demodulates in the edge tier

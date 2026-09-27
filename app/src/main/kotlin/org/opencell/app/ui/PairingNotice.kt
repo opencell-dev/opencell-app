@@ -1,5 +1,7 @@
 package org.opencell.app.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,7 +26,8 @@ import org.opencell.core.link.PairingRules
  * the code hint while Android's pairing dialog is up, Retry after a failed or
  * cancelled pairing, and the way to Bluetooth settings when the phone's bond
  * is stale (removing a bond is not a public API, so the user taps Forget).
- * Draws nothing in other link states.
+ * Draws nothing in other link states: once the bond is done the link is
+ * [LinkState.Connecting] again for the rest of setup, so the code prompt goes.
  */
 @Composable
 fun PairingNotice(state: LinkState, onRetry: (LinkTarget) -> Unit, onBluetoothSettings: () -> Unit) {
@@ -45,7 +48,8 @@ fun PairingNotice(state: LinkState, onRetry: (LinkTarget) -> Unit, onBluetoothSe
             }
             PairingProblem.STALE_BOND -> PairingCard(
                 "The terminal forgot this phone",
-                "Its pairings were cleared, but this phone still keeps the old one. In Bluetooth settings, " +
+                "Its pairings were cleared, or this phone's was replaced (it keeps 3 phones, and pairing a 4th " +
+                    "phone removes the oldest pairing), but this phone still keeps the old one. In Bluetooth settings, " +
                     "open ${state.target.label()}, choose Forget, then tap Retry and enter the new code.",
             ) {
                 Button(onClick = onBluetoothSettings) { Text("Bluetooth settings") }
@@ -57,6 +61,9 @@ fun PairingNotice(state: LinkState, onRetry: (LinkTarget) -> Unit, onBluetoothSe
 }
 
 private fun LinkTarget.label() = name ?: address
+
+/** Where the user forgets a stale bond (there is no public API to remove one). */
+internal fun bluetoothSettings() = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
 
 @Composable
 private fun PairingCard(title: String, text: String, note: String? = null, actions: @Composable () -> Unit = {}) {

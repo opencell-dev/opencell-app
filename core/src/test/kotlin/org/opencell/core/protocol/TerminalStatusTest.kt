@@ -84,6 +84,7 @@ class TerminalStatusTest {
         assertEquals(Band.BAND_2G4, s.band)
         assertEquals(Tier.NEAR, s.tier)
         assertEquals(0.0, s.snrDb, 0.0)
+        assertEquals("– (FLRC)", s.snrLabel)
     }
 
     @Test
@@ -136,6 +137,7 @@ class TerminalStatusTest {
         val s = TerminalStatus.decode(raw)
         assertEquals("Search", s.stateLabel)
         assertEquals("No signal", s.signalLabel)
+        assertEquals("no reading to show, not a fake 0.00 dB", "–", s.snrLabel)
     }
 
     /** Searching with a packet heard shows the usual reading. */
@@ -145,6 +147,7 @@ class TerminalStatusTest {
         val s = TerminalStatus.decode(raw)
         assertEquals("Search", s.stateLabel)
         assertEquals("-52 dBm", s.signalLabel)
+        assertEquals("%.2f dB".format(s.snrDb), s.snrLabel)
     }
 
     /** Outside SEARCH the terminal is synced to a cell, so 0 dBm (if it ever happened) would be a real reading, not the sentinel. */

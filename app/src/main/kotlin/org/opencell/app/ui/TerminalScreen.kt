@@ -241,9 +241,6 @@ fun DevicesPane(vm: MainViewModel, onShowStatus: () -> Unit) {
 private fun appSettings(pkg: String) =
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$pkg".toUri())
 
-/** Where the user forgets a stale bond (there is no public API to remove one). */
-private fun bluetoothSettings() = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
-
 @Composable
 private fun DeviceRow(d: ScannedDevice, connected: Boolean, onClick: () -> Unit) {
     ListItem(
@@ -364,7 +361,7 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
                     InfoRow("Tier", s.tierLabel)
                     InfoRow("Signalling", s.sigLabel)
                     InfoRow("RSSI", s.signalLabel)
-                    InfoRow("SNR", if (s.snrQuarterDb == 0 && s.band?.code == 1) "– (FLRC)" else "%.2f dB".format(s.snrDb))
+                    InfoRow("SNR", s.snrLabel)
                     InfoRow("TMID", s.tmidHex)
                     InfoRow("Frame", "${s.frame}")
                     InfoRow("Cell seed", "0x%08X".format(s.cellSeed))

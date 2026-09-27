@@ -47,6 +47,8 @@ class PairingNoticeTest {
     fun aStaleBondLinksToBluetoothSettings() {
         show(LinkState.PairingFailed(target, PairingProblem.STALE_BOND, "the terminal no longer knows this phone"))
         compose.onNodeWithText("The terminal forgot this phone").assertExists()
+        // It keeps 3 phones: pairing a 4th removes the oldest pairing, which also looks like this.
+        compose.onNodeWithText("pairing a 4th phone removes the oldest", substring = true).assertExists()
         compose.onNodeWithText("Bluetooth settings").performClick()
         assertEquals(1, settingsOpened)
         compose.onNodeWithText("Retry").performClick()
@@ -56,6 +58,15 @@ class PairingNoticeTest {
     @Test
     fun otherStatesShowNothing() {
         show(LinkState.WaitingToReconnect(target, 1, 1.seconds, "supervision timeout"))
+        compose.onNodeWithText("Retry").assertDoesNotExist()
+        compose.onNodeWithText(PairingRules.HINT).assertDoesNotExist()
+    }
+
+    /** Once bonded, setup (MTU, discovery, notifications) is ordinary connecting: no "30 seconds" card. */
+    @Test
+    fun connectingAfterTheBondShowsNoCodePrompt() {
+        show(LinkState.Connecting(target, 1))
+        compose.onNodeWithText("You have 30 seconds", substring = true).assertDoesNotExist()
         compose.onNodeWithText("Retry").assertDoesNotExist()
         compose.onNodeWithText(PairingRules.HINT).assertDoesNotExist()
     }
