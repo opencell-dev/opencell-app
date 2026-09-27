@@ -14,6 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.link.PairingProblem
+import org.opencell.core.phone.PhoneSession
 import org.robolectric.annotation.Config
 
 /** Dialer, outgoing, incoming and in-call screens against the demo terminal (spec §1 call flows). */
@@ -34,7 +35,7 @@ class CallScreensTest {
     fun outgoingCallRingsConnectsCarriesDataAndHangsUp() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        compose.onNodeWithText("Number (+883…)").performTextReplacement("+883 1 606 555 0100")
+        compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("606-555-0100")
         compose.onNodeWithText("Call").performClick()
         compose.waitForText("Outgoing call")
         compose.onNodeWithText("+883-1-606-555-00100").assertExists()
@@ -52,9 +53,28 @@ class CallScreensTest {
     fun badNumberIsRefusedInTheDialer() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
-        compose.onNodeWithText("Number (+883…)").performTextReplacement("12345")
+        compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("12345")
         compose.onNodeWithText("Call").performClick()
-        compose.waitForText("OpenCell numbers are +883 and 10 digits")
+        compose.waitForText(PhoneSession.BAD_NUMBER)
+    }
+
+    @Test
+    fun emergencyNumberIsExplainedAndNotDialled() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("911")
+        compose.waitForText(PhoneSession.EMERGENCY) // the hint under the field, as typed
+        compose.onNodeWithText("Call").performClick()
+        compose.waitForText(PhoneSession.EMERGENCY)
+        compose.onNodeWithText("Your number").assertExists() // no call screen
+    }
+
+    @Test
+    fun theDialFieldShowsTheFullFormAsYouType() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("606 555 1235")
+        compose.waitForText("Dials +883-1-606-555-01235")
     }
 
     @Test

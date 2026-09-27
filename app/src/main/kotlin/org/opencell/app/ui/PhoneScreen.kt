@@ -68,6 +68,7 @@ import org.opencell.app.ui.theme.MonoStyle
 import org.opencell.core.link.LinkState
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.phone.Activation
+import org.opencell.core.phone.PhoneSession
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.PhoneNumber
@@ -315,7 +316,7 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
             RegistrationFailure(phone)
         }
     }
-    Dialer(vm, enabled = phone.canDial)
+    Dialer(vm, enabled = phone.canDial, home = phone.number)
     CallReadiness(vm)
 }
 
@@ -395,7 +396,7 @@ internal tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-private fun Dialer(vm: MainViewModel, enabled: Boolean) {
+private fun Dialer(vm: MainViewModel, enabled: Boolean, home: String?) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Make a call", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
@@ -403,10 +404,10 @@ private fun Dialer(vm: MainViewModel, enabled: Boolean) {
                 value = vm.dialInput,
                 onValueChange = { vm.dialInput = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Number (+883…)") },
+                label = { Text("Number (606-555-01234 or +883-1-…)") },
                 singleLine = true,
                 isError = vm.dialError != null,
-                supportingText = { vm.dialError?.let { Text(it) } },
+                supportingText = { Text(vm.dialError ?: PhoneSession.dialHint(vm.dialInput, home)) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { if (enabled) vm.dial() }),
             )

@@ -17,6 +17,7 @@ import org.opencell.core.link.UplinkSender
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.Command
+import org.opencell.core.protocol.DialCheck
 import org.opencell.core.protocol.Hex
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.SigState
@@ -157,10 +158,19 @@ class PhoneSession(
     /** Sends ACTIVATE with a code the app has already checked. */
     fun activate(qr: ActivationQr): Job = command(Command.Activate(qr.text)) { apply(PhoneInput.Activating(qr.number)) }
 
-    /** Sends DIAL. Returns why [input] isn't a number the terminal takes, or null once the command is on its way. */
+    /**
+     * Sends DIAL: the full form of [input], completed from this terminal's own
+     * number (numbering v2). Returns why [input] isn't a number, or null once
+     * the command is on its way.
+     */
     fun dial(input: String): String? {
-        val number = PhoneNumber.normalize(input, _state.value.number) ?: return BAD_NUMBER
-        command(Command.Dial(number)) { apply(PhoneInput.Dialled(number)) }
+        val sent = when (val c = PhoneNumber.check(input, _state.value.number)) {
+            is DialCheck.Number -> c.full
+            is DialCheck.National -> c.digits // own number not known yet: the terminal completes it
+            DialCheck.Emergency -> return EMERGENCY
+            DialCheck.Empty, DialCheck.NotANumber -> return BAD_NUMBER
+        }
+        command(Command.Dial(sent)) { apply(PhoneInput.Dialled(sent)) }
         return null
     }
 
@@ -358,7 +368,17 @@ class PhoneSession(
     }
 
     companion object {
-        const val BAD_NUMBER = "OpenCell numbers are +883 and 10 digits, like +883 606 555 1234"
+        const val BAD_NUMBER = "Not an OpenCell number. Dial 606-555-01234, or +883-1-606-555-01234 from another country."
+        const val EMERGENCY = "OpenCell cannot make emergency calls. Use a regular phone."
+
+        /** The line under the dial field as the user types: what DIAL will send, or why it isn't a number. */
+        fun dialHint(input: String, home: String?): String = when (val c = PhoneNumber.check(input, home)) {
+            DialCheck.Empty -> ""
+            is DialCheck.Number -> "Dials ${PhoneNumber.display(c.full)}"
+            is DialCheck.National -> "Dials ${c.digits}: the terminal adds the country code"
+            DialCheck.Emergency -> EMERGENCY
+            DialCheck.NotANumber -> BAD_NUMBER
+        }
 
         /** `0xB0, seq, "oc-send"`: the frames `tools/ble/oc_ble.py send` sends and `recv` counts. */
         fun testFrame(seq: Int): ByteArray = byteArrayOf(0xB0.toByte(), seq.toByte()) + "oc-send".encodeToByteArray()

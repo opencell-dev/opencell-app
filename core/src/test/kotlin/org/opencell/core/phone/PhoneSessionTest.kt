@@ -15,6 +15,7 @@ import org.opencell.core.link.LinkTarget
 import org.opencell.core.link.UplinkSender
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.ActivationQr
+import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.Hex
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.protocol.RegMode
@@ -69,6 +70,45 @@ class PhoneSessionTest {
         assertEquals("02 2b 38 38 33 31 36 30 36 35 35 35 30 30 31 30 30", hex(h.link.commands.single()))
         assertEquals(Call(null, Direction.OUTGOING, peer, CallPhase.CALLING), h.phone.state.value.call)
         assertTrue(h.log.contains("INFO COMMAND DIAL $peer: accepted"))
+    }
+
+    /** Numbering v2 §5.3: short forms are completed from the terminal's own number; DIAL carries the full form. */
+    @Test
+    fun dialCompletesShortFormsFromTheTerminalsNumber() = runTest {
+        val memory = PhoneMemory.inMemory().apply { save(address, Remembered(me, RegMode.PART15)) }
+        val h = harness(SigState.REGISTERED, memory)
+        assertNull(h.phone.dial("606-555-0100"))
+        runCurrent()
+        assertEquals("DIAL $peer", Command.Dial(peer).label)
+        assertEquals(hex(Command.Dial(peer).encode()), hex(h.link.commands.single()))
+        assertEquals(peer, h.phone.state.value.call?.peer)
+    }
+
+    /** Own number not known yet (fresh install, no REGISTERED since): the terminal completes a national form. */
+    @Test
+    fun nationalFormWithoutAKnownNumberGoesToTheTerminalAsDigits() = runTest {
+        val h = harness()
+        assertNull(h.phone.state.value.number)
+        assertNull(h.phone.dial("606 555 1235"))
+        runCurrent()
+        assertEquals(hex(Command.Dial("6065551235").encode()), hex(h.link.commands.single()))
+    }
+
+    @Test
+    fun emergencyNumbersAreRefusedWithAReason() = runTest {
+        val h = harness()
+        for (n in listOf("911", "112", "999")) assertEquals(n, PhoneSession.EMERGENCY, h.phone.dial(n))
+        runCurrent()
+        assertTrue(h.link.commands.isEmpty())
+    }
+
+    @Test
+    fun dialHintShowsWhatWillBeDialled() {
+        assertEquals("", PhoneSession.dialHint("", me))
+        assertEquals("Dials +883-1-606-555-01235", PhoneSession.dialHint("606-555-1235", me))
+        assertEquals("Dials 6065551235: the terminal adds the country code", PhoneSession.dialHint("606-555-1235", null))
+        assertEquals(PhoneSession.EMERGENCY, PhoneSession.dialHint("911", me))
+        assertEquals(PhoneSession.BAD_NUMBER, PhoneSession.dialHint("555-1235", me))
     }
 
     @Test
