@@ -1,5 +1,6 @@
 package org.opencell.app.ui
 
+import android.Manifest
 import android.app.Application
 import android.bluetooth.BluetoothManager
 import android.os.PowerManager
@@ -27,6 +28,7 @@ data class Environment(
     val notificationPermission: Boolean = false,
     val bluetoothOn: Boolean = false,
     val batteryUnrestricted: Boolean = false,
+    val cameraPermission: Boolean = false,
 )
 
 /** The console input parsed into bytes, or why it can't be sent. */
@@ -64,6 +66,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             bluetoothOn = adapter?.isEnabled == true,
             batteryUnrestricted = ctx.getSystemService(PowerManager::class.java)
                 .isIgnoringBatteryOptimizations(ctx.packageName),
+            cameraPermission = BlePermissions.has(ctx, Manifest.permission.CAMERA),
         )
     }
 
@@ -183,6 +186,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun useDemoCode() = onCode(getApplication<Application>().graph.simulator.demoQrText())
+
+    /** The camera viewfinder is open. */
+    var scanning by mutableStateOf(false)
+
+    /** A QR code the camera read. Ignored while a code waits for confirmation; a valid one closes the camera. */
+    fun onScanned(text: String) {
+        if (pendingCode != null) return
+        onCode(text)
+        if (pendingCode != null) scanning = false
+    }
 
     fun confirmActivation() {
         val code = pendingCode ?: return

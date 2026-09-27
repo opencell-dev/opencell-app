@@ -39,6 +39,7 @@ class PhoneFlowTest {
     @Test
     fun demoCodeActivatesAndRegisters() {
         compose.connectDemoAndOpenPhone()
+        compose.onNodeWithText("Scan QR code").assertExists()
         compose.onNodeWithText("Use a demo code").performClick()
         compose.waitForText("Valid until")
         compose.onNodeWithText("+883 606 555 1234").assertExists()

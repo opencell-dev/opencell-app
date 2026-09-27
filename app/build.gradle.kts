@@ -70,6 +70,13 @@ dependencies {
     implementation(libs.compose.adaptive.layout)
     implementation(libs.compose.adaptive.navigation)
     implementation(libs.compose.navigation.suite)
+    // QR scanning: CameraX for the viewfinder and frames, ZXing to decode.
+    // Both work offline and without Google Play Services.
+    implementation(libs.camera.core)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.zxing.core)
     debugImplementation(libs.compose.ui.tooling)
 
     debugImplementation(libs.compose.ui.test.manifest)

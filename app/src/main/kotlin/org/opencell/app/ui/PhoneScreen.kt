@@ -210,6 +210,7 @@ private fun Onboarding(vm: MainViewModel, again: Boolean) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+    if (vm.pendingCode == null) ScanCode(vm)
 
     val pending = vm.pendingCode
     if (pending != null) {

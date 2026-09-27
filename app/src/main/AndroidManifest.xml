@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <!-- Scanning activation codes; pasting the code works without a camera. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- Nearby devices (Android 12+). Scan results are never used to derive location. -->
     <uses-permission
