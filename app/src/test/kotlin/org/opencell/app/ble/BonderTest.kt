@@ -7,12 +7,14 @@ import android.content.Intent
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +23,7 @@ import org.robolectric.shadows.ShadowBluetoothDevice
 import kotlin.time.Duration.Companion.seconds
 
 /** [Bonder] against Robolectric's BluetoothDevice and ACTION_BOND_STATE_CHANGED broadcasts. */
+@OptIn(ExperimentalCoroutinesApi::class) // runCurrent, advanceTimeBy, currentTime
 @RunWith(AndroidJUnit4::class)
 class BonderTest {
     private val app: Application get() = ApplicationProvider.getApplicationContext()
@@ -102,6 +105,39 @@ class BonderTest {
         runCurrent()
         bonder.abort()
         assertEquals(BondResult.LINK_LOST, r.await())
+    }
+
+    @Test
+    fun aBonderAbortedBeforeItStartsDoesNotPair() = runTest {
+        shadowOf(terminal).setCreatedBond(false) // createBond would say NOT_STARTED: it must not be called
+        val bonder = Bonder(app, terminal)
+        bonder.abort()
+        assertEquals(BondResult.LINK_LOST, bonder.bond(60.seconds))
+    }
+
+    @Test
+    fun androidsReasonForNoneIsKept() = runTest {
+        val bonder = Bonder(app, terminal)
+        val r = async { bonder.bond(60.seconds) }
+        runCurrent()
+        app.sendBroadcast(
+            Intent(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+                .putExtra(BluetoothDevice.EXTRA_DEVICE, terminal)
+                .putExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
+                .putExtra("android.bluetooth.device.extra.REASON", 3),
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(BondResult.FAILED, r.await())
+        assertEquals(3, bonder.failReason)
+    }
+
+    @Test
+    fun failureReasonsReadForTheUser() {
+        assertTrue(bondFailureMessage(3).contains("cancelled"))
+        assertTrue(bondFailureMessage(6).contains("timed out"))
+        assertTrue(bondFailureMessage(7).contains("try again in a minute"))
+        assertTrue(bondFailureMessage(4).contains("link was lost"))
+        assertTrue(bondFailureMessage(null).contains("wrong code"))
     }
 
     @Test

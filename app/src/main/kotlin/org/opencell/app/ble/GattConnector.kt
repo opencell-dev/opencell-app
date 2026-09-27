@@ -149,6 +149,10 @@ internal class GattConnection(
     @Volatile
     private var bonder: Bonder? = null
     private var bondedAtStart = false
+
+    /** The status the link dropped with (0 if none or unknown), for ops that find it gone. */
+    @Volatile
+    private var dropStatus = 0
     private lateinit var up: BluetoothGattCharacteristic
     private lateinit var status: BluetoothGattCharacteristic
     private lateinit var command: BluetoothGattCharacteristic
@@ -259,7 +263,7 @@ internal class GattConnection(
         val failure = when (result) {
             BondResult.BONDED -> null
             BondResult.NOT_STARTED -> "pairing could not start"
-            BondResult.FAILED -> "pairing failed or was cancelled (a wrong code also changes the terminal's code)"
+            BondResult.FAILED -> bondFailureMessage(b.failReason)
             BondResult.TIMED_OUT -> "pairing timed out"
             BondResult.LINK_LOST -> "the terminal dropped the link while pairing (after 3 wrong codes it refuses for 60 s)"
         }
@@ -405,7 +409,7 @@ internal class GattConnection(
         start: (BluetoothGatt) -> Boolean,
     ): Result =
         opLock.withLock {
-            val g = gatt?.takeUnless { closed.get() } ?: throw GattException("not connected")
+            val g = gatt?.takeUnless { closed.get() } ?: throw GattException("not connected", dropStatus)
             val p = Pending(kind)
             pending.set(p)
             try {
@@ -447,12 +451,15 @@ internal class GattConnection(
     fun dropped(reason: String, status: Int = 0) {
         Log.i(TAG, "dropped: $reason")
         connected.completeExceptionally(GattException(reason, status))
-        bonder?.abort()
+        if (!closed.get()) dropStatus = status // before [closed]: an op that sees it closed reads this
         if (closed.compareAndSet(false, true)) {
             failPending(reason, status)
             gatt?.close()
             if (ready.get()) events.onClosed(reason)
         }
+        // After setting [closed]: bond() publishes its Bonder, then checks [closed], so one
+        // of the two always sees the other and the wait is never left to time out.
+        bonder?.abort()
     }
 
     companion object {
@@ -486,6 +493,7 @@ internal class GattConnection(
             0x08 -> "0x08 supervision timeout"
             0x13 -> "0x13 remote closed"
             0x16 -> "0x16 local host closed"
+            PairingRules.HCI_MIC_FAILURE -> "0x3D MIC failure"
             0x3E -> "0x3E failed to establish"
             GattContract.ATT_ERR_INVALID_LENGTH -> "0x0D invalid length"
             GattContract.ATT_ERR_INSUFFICIENT_ENCRYPTION -> "0x0F insufficient encryption"

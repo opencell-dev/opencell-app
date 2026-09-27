@@ -14,8 +14,10 @@ import android.content.Intent
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -32,6 +34,7 @@ import org.opencell.core.link.ConnectionEvents
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.link.PairingException
 import org.opencell.core.link.PairingProblem
+import org.opencell.core.link.PairingRules
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.GattContract
@@ -49,6 +52,7 @@ import org.robolectric.shadows.ShadowBluetoothGatt
  * GATT setup when the phone has no bond, and turns auth refusals during setup
  * into [PairingException]s; Bluetooth turning off mid-pairing is link loss.
  */
+@OptIn(ExperimentalCoroutinesApi::class) // runCurrent, advanceTimeBy, currentTime
 @RunWith(AndroidJUnit4::class)
 class GattConnectorTest {
     private val app: OpenCellApplication get() = ApplicationProvider.getApplicationContext()
@@ -92,7 +96,9 @@ class GattConnectorTest {
     @After
     fun tearDown() {
         ServiceNotBoundGatt.notBound = false
-        AuthRefusingGatt.refuseWith = 0
+        CccdGatt.refuseWith = 0
+        CccdGatt.hold = false
+        CccdGatt.dropAfterWith = 0
     }
 
     private fun connect(): Pair<GattConnector, Connection> {
@@ -112,14 +118,14 @@ class GattConnectorTest {
         shadowOf(device).setCreatedBond(true)
     }
 
-    private fun bondState(state: Int) {
+    private fun bondState(state: Int, reason: Int? = null) {
         val device = adapter.getRemoteDevice(ADDRESS)
         shadowOf(device).setBondState(state)
-        app.sendBroadcast(
-            Intent(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-                .putExtra(BluetoothDevice.EXTRA_DEVICE, device)
-                .putExtra(BluetoothDevice.EXTRA_BOND_STATE, state),
-        )
+        val intent = Intent(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            .putExtra(BluetoothDevice.EXTRA_DEVICE, device)
+            .putExtra(BluetoothDevice.EXTRA_BOND_STATE, state)
+        if (reason != null) intent.putExtra("android.bluetooth.device.extra.REASON", reason)
+        app.sendBroadcast(intent)
         shadowOf(Looper.getMainLooper()).idle()
     }
 
@@ -241,9 +247,9 @@ class GattConnectorTest {
     }
 
     @Test
-    @Config(shadows = [AuthRefusingGatt::class])
+    @Config(shadows = [CccdGatt::class])
     fun anAuthRefusalWithAnOldBondIsAStaleBond() {
-        AuthRefusingGatt.refuseWith = GattContract.ATT_ERR_INSUFFICIENT_AUTHENTICATION
+        CccdGatt.refuseWith = GattContract.ATT_ERR_INSUFFICIENT_AUTHENTICATION
         val e = runCatching { connect() }.exceptionOrNull()
         assertTrue("$e", e is PairingException && e.problem == PairingProblem.STALE_BOND)
         assertEquals(0, pairing)
@@ -251,10 +257,10 @@ class GattConnectorTest {
     }
 
     @Test
-    @Config(shadows = [AuthRefusingGatt::class])
+    @Config(shadows = [CccdGatt::class])
     fun anAuthRefusalRightAfterPairingIsAFailedPairing() = runTest {
         unbonded()
-        AuthRefusingGatt.refuseWith = GattContract.ATT_ERR_INSUFFICIENT_ENCRYPTION
+        CccdGatt.refuseWith = GattContract.ATT_ERR_INSUFFICIENT_ENCRYPTION
         val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
         runCurrent()
         bondState(BluetoothDevice.BOND_BONDED)
@@ -262,10 +268,59 @@ class GattConnectorTest {
         assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
     }
 
+    /** The terminal dropping the link mid-pairing (e.g. locked after 3 wrong codes) ends the wait at once. */
     @Test
-    @Config(shadows = [AuthRefusingGatt::class])
+    fun theLinkDroppingWhilePairingFailsThePairingAtOnce() = runTest {
+        unbonded()
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        shadowOf(gatt).gattCallback.onConnectionStateChange(gatt, 0x05, BluetoothProfile.STATE_DISCONNECTED)
+        runCurrent()
+        assertTrue("not left waiting out the bond timeout", c.isCompleted)
+        assertTrue("no virtual time passed", currentTime < 60_000)
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue(shadowOf(gatt).isClosed)
+    }
+
+    /** Re-encrypting with a key the terminal no longer has: it disconnects with "key missing". */
+    @Test
+    @Config(shadows = [CccdGatt::class])
+    fun aKeyMissingDropDuringACccdWriteIsAStaleBond() = runTest {
+        CccdGatt.hold = true
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        assertFalse("the CCCD write is pending", c.isCompleted)
+        shadowOf(gatt).gattCallback.onConnectionStateChange(gatt, PairingRules.HCI_PIN_OR_KEY_MISSING, BluetoothProfile.STATE_DISCONNECTED)
+        runCurrent()
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.STALE_BOND)
+    }
+
+    /** A drop landing between two ops: the next op's "not connected" carries the drop's status. */
+    @Test
+    @Config(shadows = [CccdGatt::class])
+    fun aKeyMissingDropBetweenOpsIsAStaleBond() {
+        CccdGatt.dropAfterWith = PairingRules.HCI_PIN_OR_KEY_MISSING
+        val e = runCatching { connect() }.exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.STALE_BOND)
+    }
+
+    @Test
+    fun theRefusalReasonAndroidGivesIsInTheMessage() = runTest {
+        unbonded()
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        bondState(BluetoothDevice.BOND_NONE, reason = 7) // UNBOND_REASON_REPEATED_ATTEMPTS
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue("${e?.message}", e!!.message!!.contains("try again in a minute"))
+    }
+
+    @Test
+    @Config(shadows = [CccdGatt::class])
     fun otherSetupFailuresAreNotAboutPairing() {
-        AuthRefusingGatt.refuseWith = GattContract.ATT_ERR_NOT_NOW
+        CccdGatt.refuseWith = GattContract.ATT_ERR_NOT_NOW
         val e = runCatching { connect() }.exceptionOrNull()
         assertTrue("$e", e is ConnectException)
     }
@@ -307,21 +362,38 @@ class ServiceNotBoundGatt : ShadowBluetoothGatt() {
     }
 }
 
-/** [ShadowBluetoothGatt] whose CCCD writes the terminal can answer with an ATT error ([refuseWith], 0 = accept). */
+/**
+ * [ShadowBluetoothGatt] whose CCCD writes act like the terminal's: answered
+ * with an ATT error ([refuseWith], 0 = accept), never answered ([hold]), or
+ * accepted and then followed by a disconnect with [dropAfterWith] (0 = none).
+ */
 @Implements(BluetoothGatt::class)
-class AuthRefusingGatt : ShadowBluetoothGatt() {
+class CccdGatt : ShadowBluetoothGatt() {
     @RealObject
     private lateinit var real: BluetoothGatt
 
     @Implementation(minSdk = 33)
     override fun writeDescriptor(d: BluetoothGattDescriptor, value: ByteArray): Int {
-        if (refuseWith == 0) return super.writeDescriptor(d, value)
-        gattCallback.onDescriptorWrite(real, d, refuseWith)
+        when {
+            hold -> Unit
+            refuseWith != 0 -> gattCallback.onDescriptorWrite(real, d, refuseWith)
+            dropAfterWith != 0 -> {
+                gattCallback.onDescriptorWrite(real, d, BluetoothGatt.GATT_SUCCESS)
+                gattCallback.onConnectionStateChange(real, dropAfterWith, BluetoothProfile.STATE_DISCONNECTED)
+            }
+            else -> return super.writeDescriptor(d, value)
+        }
         return BluetoothStatusCodes.SUCCESS
     }
 
     companion object {
         @Volatile
         var refuseWith = 0
+
+        @Volatile
+        var hold = false
+
+        @Volatile
+        var dropAfterWith = 0
     }
 }

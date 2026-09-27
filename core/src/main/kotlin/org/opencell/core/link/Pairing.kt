@@ -36,6 +36,9 @@ object PairingRules {
     /** HCI "authentication failure": also how the terminal drops a phone while pairing is locked. */
     const val HCI_AUTH_FAILURE = 0x05
 
+    /** HCI "connection terminated due to MIC failure": the link was encrypted with keys the peer doesn't share. */
+    const val HCI_MIC_FAILURE = 0x3D
+
     /** Shown while the system pairing dialog is up. */
     const val HINT = "Enter the 6-digit code shown on the terminal's screen (press PRG to reach the Pairing screen)."
 
@@ -48,6 +51,7 @@ object PairingRules {
         GattContract.ATT_ERR_INSUFFICIENT_ENCRYPTION,
         GATT_AUTH_FAIL,
         HCI_PIN_OR_KEY_MISSING,
+        HCI_MIC_FAILURE,
         -> true
         else -> false
     }

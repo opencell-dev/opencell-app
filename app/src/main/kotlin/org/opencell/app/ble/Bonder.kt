@@ -15,6 +15,22 @@ import kotlin.time.Duration
 /** How [Bonder.bond] ended. */
 internal enum class BondResult { BONDED, FAILED, TIMED_OUT, NOT_STARTED, LINK_LOST }
 
+// BluetoothDevice.EXTRA_REASON and its UNBOND_REASON_* values, hidden in the SDK: best effort.
+private const val EXTRA_REASON = "android.bluetooth.device.extra.REASON"
+private const val UNBOND_REASON_AUTH_CANCELED = 3
+private const val UNBOND_REASON_REMOTE_DEVICE_DOWN = 4
+private const val UNBOND_REASON_AUTH_TIMEOUT = 6
+private const val UNBOND_REASON_REPEATED_ATTEMPTS = 7
+
+/** What to tell the user when a bond ended in NONE, given Android's [Bonder.failReason]. */
+internal fun bondFailureMessage(reason: Int?): String = when (reason) {
+    UNBOND_REASON_AUTH_CANCELED -> "pairing was cancelled"
+    UNBOND_REASON_AUTH_TIMEOUT -> "pairing timed out"
+    UNBOND_REASON_REPEATED_ATTEMPTS -> "the terminal is refusing pairing after 3 wrong codes: try again in a minute"
+    UNBOND_REASON_REMOTE_DEVICE_DOWN -> "the link was lost during pairing"
+    else -> "pairing failed or was cancelled (a wrong code also changes the terminal's code)"
+}
+
 /**
  * Bonds with one device: `createBond()` (Android shows its passkey dialog;
  * the user types the code from the terminal's OLED), then waits for
@@ -26,13 +42,21 @@ internal enum class BondResult { BONDED, FAILED, TIMED_OUT, NOT_STARTED, LINK_LO
 internal class Bonder(private val context: Context, private val device: BluetoothDevice) {
     private val result = CompletableDeferred<BondResult>()
 
+    /** Android's reason when the bond ended in NONE (see [bondFailureMessage]), if it gave one. */
+    @Volatile
+    var failReason: Int? = null
+        private set
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
             val d = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
             if (d?.address != device.address) return
             when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)) {
                 BluetoothDevice.BOND_BONDED -> result.complete(BondResult.BONDED)
-                BluetoothDevice.BOND_NONE -> result.complete(BondResult.FAILED)
+                BluetoothDevice.BOND_NONE -> {
+                    if (intent.hasExtra(EXTRA_REASON)) failReason = intent.getIntExtra(EXTRA_REASON, 0)
+                    result.complete(BondResult.FAILED)
+                }
             }
         }
     }
@@ -43,6 +67,8 @@ internal class Bonder(private val context: Context, private val device: Bluetoot
     }
 
     suspend fun bond(timeout: Duration): BondResult {
+        // Aborted already: the link is gone, so don't start a system pairing on it.
+        if (result.isCompleted) return result.await()
         // Exported: the broadcast comes from the Bluetooth process, not system_server,
         // and only the system may send it (it is protected), so nothing else can fake it.
         ContextCompat.registerReceiver(
