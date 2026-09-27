@@ -33,8 +33,8 @@ class CallFlowTest {
         val state get() = session.phone.state.value
     }
 
-    private fun TestScope.bench(activated: Boolean): Bench {
-        val sim = SimulatedTerminal(backgroundScope, activatedNumber = if (activated) me else null)
+    private fun TestScope.bench(activated: Boolean, mode: RegMode = RegMode.PART15): Bench {
+        val sim = SimulatedTerminal(backgroundScope, activatedNumber = if (activated) me else null, mode = mode)
         val session = TerminalSession(sim, backgroundScope, testScheduler.timeSource, { testScheduler.currentTime })
         return Bench(sim, session)
     }
@@ -108,6 +108,23 @@ class CallFlowTest {
     }
 
     @Test
+    fun part97RegistrationIsReportedAndCallDataStillWorks() = runTest {
+        val b = bench(activated = true, mode = RegMode.PART97)
+        connect(b)
+        assertEquals(SigState.REGISTERED, b.state.sig)
+        assertEquals(RegMode.PART97, b.state.mode)
+
+        assertNull(b.phone.dial(peer))
+        advanceTimeBy(4_000)
+        assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
+
+        b.phone.sendTestFrames(count = 3)
+        advanceTimeBy(2_000)
+        assertEquals(3, b.phone.callData.value.sent)
+        assertEquals(3, b.phone.callData.value.testFramesReceived) // the peer echoes
+    }
+
+    @Test
     fun ownNumberIsBusyAndUnreachableNumbersEnd() = runTest {
         val b = bench(activated = true)
         connect(b)
@@ -152,7 +169,10 @@ class CallFlowTest {
         val b = bench(activated = true)
         connect(b)
         b.sim.incomingCall(peer)
-        advanceTimeBy(61_000)
+        advanceTimeBy(60_010) // the terminal's ring timeout (60 s), like a local REJECT/HANGUP
+        assertEquals(SigState.RELEASING, b.state.sig)
+        assertEquals(CallPhase.RELEASING, b.state.call?.phase)
+        advanceTimeBy(1_000) // the release delay before ENDED
         assertEquals(EndCause.NO_ANSWER, b.state.call?.cause)
     }
 

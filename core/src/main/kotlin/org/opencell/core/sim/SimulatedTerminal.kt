@@ -126,7 +126,14 @@ class SimulatedTerminal(
         answered = false
         sig = SigState.RINGING_IN
         emit(TerminalEvent.Incoming(callId, caller))
-        later(timing.ringTimeout) { end(EndCause.NO_ANSWER) }
+        later(timing.ringTimeout) {
+            // Like the firmware (lc_sig_term.c): an unanswered incoming call goes
+            // RINGING_IN -> RELEASING (a STATUS notification, no EVENT yet) and only
+            // ends once the release completes, same as a local HANGUP/REJECT.
+            sig = SigState.RELEASING
+            statusChanged()
+            later(timing.release) { end(EndCause.NO_ANSWER) }
+        }
         true
     }
 
