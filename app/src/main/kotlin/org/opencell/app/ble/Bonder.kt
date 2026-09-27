@@ -28,7 +28,7 @@ internal fun bondFailureMessage(reason: Int?): String = when (reason) {
     UNBOND_REASON_AUTH_TIMEOUT -> "pairing timed out"
     UNBOND_REASON_REPEATED_ATTEMPTS -> "the terminal is refusing pairing after 3 wrong codes: try again in a minute"
     UNBOND_REASON_REMOTE_DEVICE_DOWN -> "the link was lost during pairing"
-    else -> "pairing failed or was cancelled (a wrong code also changes the terminal's code)"
+    else -> "pairing failed (a wrong code also changes the terminal's code)"
 }
 
 /**

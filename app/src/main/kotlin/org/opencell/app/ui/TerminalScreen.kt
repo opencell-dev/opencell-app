@@ -168,6 +168,9 @@ fun DevicesPane(vm: MainViewModel, onShowStatus: () -> Unit) {
                         }
                     }
                 }
+                item {
+                    PairingNotice(state, onRetry = vm::connect, onBluetoothSettings = { context.startActivity(bluetoothSettings()) })
+                }
             } else {
                 vm.lastTarget?.let { last ->
                     item {
@@ -237,6 +240,9 @@ fun DevicesPane(vm: MainViewModel, onShowStatus: () -> Unit) {
 
 private fun appSettings(pkg: String) =
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$pkg".toUri())
+
+/** Where the user forgets a stale bond (there is no public API to remove one). */
+private fun bluetoothSettings() = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
 
 @Composable
 private fun DeviceRow(d: ScannedDevice, connected: Boolean, onClick: () -> Unit) {
@@ -308,11 +314,13 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
     val status by vm.status.collectAsStateWithLifecycle()
     val updated by vm.statusUpdated.collectAsStateWithLifecycle()
     val wanted by vm.wanted.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        PairingNotice(state, onRetry = vm::connect, onBluetoothSettings = { context.startActivity(bluetoothSettings()) })
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -327,6 +335,7 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
                 }
                 (state as? LinkState.Connected)?.let { InfoRow("MTU", "${it.mtu}") }
                 (state as? LinkState.WaitingToReconnect)?.let { InfoRow("Last error", it.reason) }
+                (state as? LinkState.PairingFailed)?.let { InfoRow("Last error", it.reason) }
                 Spacer(Modifier.padding(2.dp))
                 if (wanted != null) {
                     FilledTonalButton(onClick = vm::disconnect) { Text("Disconnect") }

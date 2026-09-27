@@ -83,6 +83,21 @@ also do all of the following:
   connect; the app reconnects by itself (1 s, 2 s, 4 s … 30 s) until you tap
   **Disconnect**, here or in the notification. Turning Bluetooth off counts
   as losing the link; turning it back on reconnects at once.
+- **Pairing.** The terminal only talks to paired phones. The first time you
+  connect, Android asks for a code and the app shows: *Enter the 6-digit code
+  shown on the terminal's screen (press PRG to reach the Pairing screen)*. You
+  have 30 seconds to enter it, or the terminal ends the attempt and you'll
+  need to try again. The terminal's screen jumps to `PAIR CODE` by itself when
+  the phone starts pairing. The code changes after every disconnect and every
+  wrong try, and 3 wrong tries in a minute lock pairing for 60 s
+  (`LOCKED 42S`). A paired phone reconnects without a code; the terminal keeps
+  up to 3 phones. A failed or cancelled pairing is not retried by itself (each
+  try costs one of the terminal's 3): tap **Retry**.
+- **"The terminal forgot this phone."** Holding PRG for 5 s on the terminal's
+  Pairing screen clears its pairings, but the phone keeps its half. Tap
+  **Bluetooth settings**, open the terminal (`OpenCell-…`), choose **Forget**,
+  then **Retry** and enter the new code. (Apps can't remove a pairing
+  themselves.)
 - **Demo terminal** is a simulated terminal and network, for trying everything
   without hardware. It offers **Use a demo code** for activation, its test peer
   (**Test peer**, +883 606 555 0100) answers after 3 s, calling your own number
@@ -158,27 +173,14 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
 
 ## Known limitations
 
-- **BLE pairing and encryption aren't implemented yet.** The BLE link
-  between the phone and the terminal is neither paired nor encrypted, so
-  anyone in BLE range can:
-  - write COMMANDs — including DEACTIVATE, which wipes the terminal's
-    keys — or UP frames;
-  - read STATUS and receive EVENT and DOWN notifications: the terminal's
-    number, callers' and called numbers, call progress and causes, and the
-    in-call app data (the radio hop encrypts it in Part 15; the BLE hop
-    doesn't);
-  - sniff the activation code. The network keys never cross BLE, but the
-    `opencell:1:` text does, once, at activation, and it carries the token
-    secret: it *is* the activation credential. Someone capturing it could
-    race the terminal to activate with it (the network accepts each code
-    once).
-
-  The app also doesn't authenticate the terminal: any device advertising
-  the OpenCell service UUID shows up in the list, and a code scanned while
-  connected to it would be sent to it. Connect only to the terminal you
-  expect (its name ends in its TMID). How to secure the hop (bonding, a
-  pairing window) is an open decision; see `security-model.md`'s "BLE hop
-  (terminal ↔ phone)" section on the `lc-sig` branch.
+- **The terminal's screen is the pairing trust anchor.** The BLE link is
+  paired (LE Secure Connections, passkey) and encrypted, so nobody in range
+  can send commands, read the link or sniff the activation code without
+  pairing, and pairing needs the code on the terminal's OLED. Anyone who can
+  see that screen can pair a phone. The app still lists every device that
+  advertises the OpenCell service: pairing with the code on the screen in
+  front of you is what proves it is your terminal. See `security-model.md`'s
+  "BLE hop (terminal ↔ phone)" section on the `ble-pair` branch.
 - **Voice isn't in this step.** A connected call has the data-frame test
   above, not audio; see Architecture below for where the codec plugs in.
 - **QR scanning costs APK size.** CameraX and ZXing add about 8.8 MB to the
@@ -193,7 +195,8 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   protocol/  GattContract, TerminalStatus (+ SigState), Command, TerminalEvent,
              PhoneNumber (BCD), ActivationQr (+ CRC-16), payload rules, Hex, Tmid
   link/      TerminalLink  <- the seam every upper layer uses (app data, COMMAND, EVENT, STATUS)
-             LinkManager   (connect, reconnect with backoff, flows)
+             LinkManager   (connect, reconnect with backoff, flows; stops on a pairing problem)
+             PairingRules  (auth statuses, stale bond vs failed pairing)
              UplinkSender  (validation + 0x80 retry policy, ordered sends)
   phone/     PhoneReducer  (pure state machine: EVENTs, STATUS byte 3, accepted commands)
              PhoneSession  (commands, resync on connect, in-call data test)
@@ -201,7 +204,8 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
   sim/       SimulatedTerminal (terminal + network: demo mode and tests)
 :app   (Android)
-  ble/       GattConnector/GattConnection (serialized GATT ops), BleScanner
+  ble/       GattConnector/GattConnection (serialized GATT ops), Bonder (createBond +
+             ACTION_BOND_STATE_CHANGED), BleScanner
   data/      TerminalRepository (app-scoped owner of the session), PrefsPhoneMemory
   scan/      QrDecoder (ZXing), QrScanner (CameraX)
   service/   LinkService (connectedDevice foreground service, owns ringing via
@@ -215,9 +219,10 @@ Folding or unfolding the phone, rotating it, or closing the UI never
 disconnects. The foreground service keeps the process alive while a link is
 wanted.
 
-GATT connections are opened only in `ble/GattConnector.kt`; BLE pairing or
-bonding, if the terminal starts to require it, goes there without touching
-the layers above `Connector`.
+GATT connections are opened only in `ble/GattConnector.kt`, which also bonds
+with the terminal (`ble/Bonder.kt`) before touching any characteristic. Above
+`Connector`, pairing shows up only as `LinkState.Pairing` (the code hint) and
+`LinkState.PairingFailed` (Retry, or Bluetooth settings for a stale bond).
 
 The voice codec will plug into `TerminalLink` next to `PhoneSession`: it should
 write once per 120 ms frame between CONNECTED and ENDED and drop a frame on
