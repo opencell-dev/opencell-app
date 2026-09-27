@@ -1,12 +1,18 @@
 # OpenCell Android app
 
-Bring-up and diagnostics app for an OpenCell terminal (Meshnology W12:
-ESP32-S3 + LR2021) over BLE. It scans for terminals, keeps one connected
-(also with the screen off), shows the decoded STATUS, sends UP payloads,
-logs DOWN payloads, and runs the bench loopback test. Voice and call control
-are not here yet; the data layer is built so they can sit on top of it.
+The phone side of an OpenCell terminal (Meshnology W12: ESP32-S3 + LR2021),
+over BLE. The terminal runs all signalling (activation, MILENAGE
+registration, call control) and holds every key; the app is the user
+interface and holds no secrets. The app:
 
-The BLE contract is `firmware/components/lc_term/include/lc_term_gatt.h`.
+- activates a terminal from a one-time QR code (camera or pasted text);
+- shows the registered number, the network's mode (Part 15 / Part 97) and the link;
+- places calls, rings for incoming calls itself (a looping ringtone and
+  vibration, whatever screen is showing), answers, rejects and hangs up;
+- offers a data-frame test in a connected call (voice is not in this step);
+- keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test.
+
+The BLE contract (v2) is `firmware/components/lc_term/include/lc_term_gatt.h`.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
 
 ## Build
@@ -22,7 +28,7 @@ echo "sdk.dir=$HOME/Android/Sdk" > local.properties   # if ANDROID_HOME isn't se
 
 The APK is `app/build/outputs/apk/debug/app-debug.apk`.
 `testDebugUnitTest` runs the JVM tests of both modules: the `:core` protocol,
-link and loopback tests, and the Robolectric UI smoke tests in `:app`.
+phone state, call-flow, link and loopback tests, and the Robolectric UI tests in `:app`.
 
 ## Install on the Galaxy Z Fold 7
 
@@ -40,21 +46,24 @@ link and loopback tests, and the Robolectric UI smoke tests in `:app`.
 
 ## Permissions
 
-The app asks for these on first use (the **Grant** card on the Terminal tab):
-
-| Permission | Why |
-|---|---|
-| Nearby devices (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`) | Find and connect to terminals. Scanning is declared `neverForLocation`, so no location permission is needed. |
-| Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification of the foreground service. |
+| Permission | Why | Asked |
+|---|---|---|
+| Nearby devices (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`) | Find and connect to terminals. Scanning is declared `neverForLocation`, so no location permission is needed. | **Grant** card on the Terminal tab |
+| Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification, and the incoming-call notification (Answer / Reject, full screen). Ringing itself (the ringtone and vibration) doesn't need it. | Same card; also an **Allow** card on the Phone tab, which opens Settings once a plain request has already been denied |
+| Camera (`CAMERA`) | Scanning the activation QR code. Pasting the code works without it. | When you tap **Scan QR code** |
+| Full-screen calls (`USE_FULL_SCREEN_INTENT`) | Incoming calls over the lock screen. Android 14+ grants it by default only to Play-listed calling apps, so allow it once in Settings. Without it a call shows as a heads-up notification. | **Allow** card on the Phone tab, which opens the system setting |
 
 The app also declares these, and they need no prompt:
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE`: keep the link up with the screen off.
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: open the system battery dialog.
 
+QR scanning uses CameraX and ZXing: it works offline and without Google Play Services.
+
 ## Samsung battery settings (do this once)
 
 One UI kills background apps aggressively. A foreground service helps, but
-for a link that must survive hours with the screen off, also do all of the following:
+for a link that must survive hours with the screen off (and ring for calls),
+also do all of the following:
 
 - Settings > Apps > OpenCell > Battery > **Unrestricted**. The **Allow**
   button on the "Background use" card opens the same system dialog.
@@ -65,60 +74,113 @@ for a link that must survive hours with the screen off, also do all of the follo
 
 ## Using it
 
-- **Terminal**: tap **Scan**. Terminals advertise as `OpenCell-XXXXXXXX`, where
+### Connect
+
+- **Terminal** tab: tap **Scan**. Terminals advertise as `OpenCell-XXXXXXXX`, where
   the suffix is the TMID. A terminal stops advertising while a phone is
-  connected. Tap one to connect; the app reconnects by itself (1 s, 2 s, 4 s
-  … 30 s) until you tap **Disconnect**, here or in the notification.
-  **Demo terminal** is a simulated terminal plus echoing cell, for trying the
-  app without hardware.
-- **Status**: the decoded STATUS (state, band, tier, RSSI, SNR, TMID, frame,
-  cell seed). It updates live on each notification; **Refresh** reads it.
-- **Console**: send text (UTF-8) or hex (`48 45 4c`, `48-45-4C`, `0x48 …`).
-  - Limits: at most 20 bytes per payload, and at most 8 bytes while the terminal is IDLE (RACH).
-  - Retries: ATT **0x80** ("not now") is retried after 120, 240, 480 and 960 ms,
-    then every 1 s, for 8 attempts in all (about 4.8 s). ATT **0x0D** ("too long")
-    is never retried.
-  - Testing 0x0D: turn on the "Allow over 20 bytes" switch to send an oversize
-    payload.
-  - Every UP, DOWN and link event is logged with a timestamp, in hex and ASCII.
+  connected (it takes one connection: stop `tools/ble/oc_ble.py` first). Tap one to
+  connect; the app reconnects by itself (1 s, 2 s, 4 s … 30 s) until you tap
+  **Disconnect**, here or in the notification.
+- **Demo terminal** is a simulated terminal and network, for trying everything
+  without hardware. It offers **Use a demo code** for activation, its test peer
+  (**Test peer**, +883 606 555 0100) answers after 3 s, calling your own number
+  is busy, and +883 606 555 9999 is unreachable.
 
-### Loopback test against a terminal
+### Activate (Phone tab)
 
-This mirrors the bench test: the cell echoes each UL payload on DL.
+1. Get a code: from the portal, or on the bench `lcbench mkqr --number +883…`
+   (it prints the QR code and the `opencell:1:…` text).
+2. **Scan QR code**, or paste the text and tap **Check code**. The app checks the
+   code exactly like the terminal (prefix, length, base64url, version, CRC) and
+   shows its number and expiry before sending anything.
+3. **Activate**. The terminal agrees its keys with the network (a few seconds),
+   then registers. Failures say why: unknown code, code already used, expired,
+   bad tag, or no answer from the network.
 
-1. Bring up the test cell that echoes, and power the terminal. Wait until the
-   Status tab shows **Granted**. **Idle** also works, but only for probes of
-   8 bytes or less.
-2. Open **Loopback**. The defaults are 20 probes, one every 1000 ms, payload
-   `HELLO`, and a sequence tag, so each probe is `HELLO#00`, `HELLO#01`, …
-   (8 bytes). The tag matches each echo to its probe exactly.
-3. Tap **Start**. Each probe shows its latency, or "lost" / the refusal reason.
-   The summary shows:
-   - counts: sent, echoed, lost, refused, and stray DOWNs;
-   - latency: mean, median, min and max;
-   - how many echoes arrived within 500 ms.
+**Activate with a new code** (menu) replaces the terminal's keys only if the
+network accepts the new code. **Deactivate terminal** (menu, with a
+confirmation) wipes the terminal's keys; the menu is hidden during a call
+(and the terminal refuses DEACTIVATE anyway if it ever reaches it).
 
-   Latency runs from the start of the UP write the terminal accepted to the
-   DOWN notification. It includes the BLE write round trip, the wait for the
-   UL slot, the cell's turnaround and the notification.
-   The bench measured about 0.43 s.
+### Calls
+
+- **Make a call**: type a +883 number (spaces and dashes are fine) and tap **Call**.
+  The call screen shows Calling, Ringing, Connected, and at the end the cause
+  (busy, no answer, unreachable, rejected, link lost…).
+- **Incoming**: the phone rings itself — a looping ringtone and vibration
+  from the foreground service, honouring the ringer mode (silent: neither;
+  vibrate: vibration only) — while a call is incoming and the terminal link
+  is up, whatever screen is showing; neither the call screen nor the
+  notification make any sound of their own. The call notification carries
+  **Answer** / **Reject** and opens the full-screen call screen over the
+  lock screen when allowed (see Permissions above).
+- **Connected**: voice is not in this step. **Send 5 test frames** sends the
+  frames `tools/ble/oc_ble.py send` sends (`b0 <seq> "oc-send"`, 9 bytes),
+  each written once (no retries — a late test frame is as useless as a late
+  voice frame would be) and only while the call is still connected; the run
+  stops the moment the call ends or the link drops. The bench's test peer
+  echoes them, another terminal receives them. The screen counts what comes
+  back.
+- If the phone loses the terminal during a call, the call goes on in the
+  terminal. The terminal doesn't queue events while no phone is connected, so on
+  reconnecting the app reads STATUS and shows where the call is; a call that
+  started while the phone was away shows as "Unknown caller" and can still be
+  answered or rejected.
+
+### Diagnostics
+
+- **Status** (Terminal tab): the decoded STATUS (state, band, tier, signalling
+  state, RSSI, SNR, TMID, frame, cell seed). It updates live; **Refresh** reads it.
+- **Console**: send text (UTF-8) or hex (`48 45 4c`, `48-45-4C`, `0x48 …`) on UP, and see
+  every UP, DOWN, EVENT, COMMAND and link event with a timestamp.
+  - Limits: at most 18 bytes per frame, and only while the terminal holds a
+    grant (ATT **0x80** otherwise).
+  - Retries: 0x80 on UP is retried after 120, 240, 480 and 960 ms, then every
+    1 s, for 8 attempts in all (about 4.8 s). ATT **0x0D** ("too long") is never
+    retried. COMMANDs are never retried: 0x80 there means the terminal is in
+    another state, so the app shows why and reads STATUS again; sending the
+    same command again while one is still in flight (a double-tap on Answer,
+    say) is ignored, not queued.
+- **Loopback**: the bench loopback test (a cell that echoes each UL frame on DL).
+  It needs a grant: outside a call that means a test cell (`lcbench cell`) that
+  keeps the terminal granted. The defaults are 20 probes, one every 1000 ms,
+  payload `HELLO` with a sequence tag (`HELLO#00`, …). The summary shows sent,
+  echoed, lost, refused, stray DOWNs, and latency.
+
+## Known limitations
+
+- **BLE pairing and encryption aren't implemented yet.** The BLE link
+  between the phone and the terminal is neither paired nor encrypted:
+  anyone in BLE range can write COMMANDs — including DEACTIVATE, which wipes
+  the terminal's keys — or UP frames. How to secure the hop (bonding, a
+  pairing window) is an open decision; see `security-model.md`'s "BLE hop
+  (terminal ↔ phone)" section on the `lc-sig` branch. The keys themselves
+  never cross BLE: the QR text does, once, at activation.
+- **Voice isn't in this step.** A connected call has the data-frame test
+  above, not audio; see Architecture below for where the codec plugs in.
 
 ## Architecture
 
 ```
 :core  (pure Kotlin/JVM, unit-tested)
-  protocol/  GattContract, TerminalStatus decoder, payload rules, Hex, Tmid
-  link/      TerminalLink  <- the seam every upper layer uses (opaque ≤20-byte payloads)
-             LinkManager   (connect, reconnect with backoff, DOWN/STATUS flows)
+  protocol/  GattContract, TerminalStatus (+ SigState), Command, TerminalEvent,
+             PhoneNumber (BCD), ActivationQr (+ CRC-16), payload rules, Hex, Tmid
+  link/      TerminalLink  <- the seam every upper layer uses (app data, COMMAND, EVENT, STATUS)
+             LinkManager   (connect, reconnect with backoff, flows)
              UplinkSender  (validation + 0x80 retry policy, ordered sends)
+  phone/     PhoneReducer  (pure state machine: EVENTs, STATUS byte 3, accepted commands)
+             PhoneSession  (commands, resync on connect, in-call data test)
   loopback/  LoopbackRunner, LoopbackStats
-  session/   TerminalSession (link + sender + console + loopback), ConsoleLog
-  sim/       SimulatedTerminal (demo mode and tests)
+  session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
+  sim/       SimulatedTerminal (terminal + network: demo mode and tests)
 :app   (Android)
   ble/       GattConnector/GattConnection (serialized GATT ops), BleScanner
-  data/      TerminalRepository (app-scoped owner of the session)
-  service/   LinkService (connectedDevice foreground service + notification)
-  ui/        Compose: navigation suite, list-detail Terminal/Status, Console, Loopback
+  data/      TerminalRepository (app-scoped owner of the session), PrefsPhoneMemory
+  scan/      QrDecoder (ZXing), QrScanner (CameraX)
+  service/   LinkService (connectedDevice foreground service, owns ringing via
+             RingPlan), CallRinger, CallNotifier, CallActionReceiver
+  ui/        Compose: Phone (activation, home, dialer), CallScreen/CallActivity,
+             Terminal/Status, Console, Loopback
 ```
 
 The link lives in the Application, not in an Activity or ViewModel.
@@ -126,8 +188,11 @@ Folding or unfolding the phone, rotating it, or closing the UI never
 disconnects. The foreground service keeps the process alive while a link is
 wanted.
 
-Voice and call control will plug into `TerminalLink`, using the `downlink`
-flow and `writeUp`. A codec should write once per 120 ms frame and drop a
-frame on 0x80 instead of retrying, because a late voice frame is useless.
-`UplinkSender` is for ordered control traffic. Codec2 1200/1300 packs three
-40 ms frames into about 19.5 bytes, which fits one 20-byte payload per frame.
+GATT connections are opened only in `ble/GattConnector.kt`; BLE pairing or
+bonding, if the terminal starts to require it, goes there without touching
+the layers above `Connector`.
+
+The voice codec will plug into `TerminalLink` next to `PhoneSession`: it should
+write once per 120 ms frame between CONNECTED and ENDED and drop a frame on
+0x80 instead of retrying, because a late voice frame is useless. Codec2 1200
+packs three 40 ms frames into 18 bytes, one app data frame per radio frame.
