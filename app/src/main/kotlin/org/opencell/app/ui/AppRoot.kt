@@ -55,6 +55,13 @@ enum class Destination(val label: String, val icon: ImageVector) {
 @Composable
 fun AppRoot(vm: MainViewModel) {
     var destination by rememberSaveable { mutableStateOf(Destination.PHONE) }
+    val phone by vm.phone.collectAsStateWithLifecycle()
+    if (phone.call != null) {
+        // Any call (ringing, connected or just ended) takes the whole screen, whatever tab is open.
+        CallScreen(vm.phoneSession)
+        return
+    }
+
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             Destination.entries.forEach { d ->
