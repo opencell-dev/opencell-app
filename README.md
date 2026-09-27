@@ -49,8 +49,8 @@ phone state, call-flow, link and loopback tests, and the Robolectric UI tests in
 | Permission | Why | Asked |
 |---|---|---|
 | Nearby devices (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`) | Find and connect to terminals. Scanning is declared `neverForLocation`, so no location permission is needed. | **Grant** card on the Terminal tab |
-| Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification, and the incoming-call notification (Answer / Reject, full screen). Ringing itself (the ringtone and vibration) doesn't need it. | Same card; also an **Allow** card on the Phone tab, which opens Settings once a plain request has already been denied |
-| Camera (`CAMERA`) | Scanning the activation QR code. Pasting the code works without it. | When you tap **Scan QR code** |
+| Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification, and the incoming-call notification (Answer / Reject, full screen). Ringing itself (the ringtone and vibration) doesn't need it. | Same card; also an **Allow** card on the Phone tab (it also shows when notifications or the calls channel are blocked in Settings), which opens the app's notification settings when the permission is already granted or a request was denied for good |
+| Camera (`CAMERA`) | Scanning the activation QR code. Pasting the code works without it. | When you tap **Scan QR code**; if it was denied for good, the Phone tab says so and links to the app's settings |
 | Full-screen calls (`USE_FULL_SCREEN_INTENT`) | Incoming calls over the lock screen. Android 14+ grants it by default only to Play-listed calling apps, so allow it once in Settings. Without it a call shows as a heads-up notification. | **Allow** card on the Phone tab, which opens the system setting |
 
 The app also declares these, and they need no prompt:
@@ -111,7 +111,10 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   from the foreground service, honouring the ringer mode (silent: neither;
   vibrate: vibration only) — while a call is incoming and the terminal link
   is up, whatever screen is showing; neither the call screen nor the
-  notification make any sound of their own. The call notification carries
+  notification make any sound of their own. While Do Not Disturb is on (any
+  interruption filter other than "all", checked when the ring starts) it
+  doesn't ring or vibrate at all, even for callers DND would let through;
+  the call notification and call screen still appear. The call notification carries
   **Answer** / **Reject** and opens the full-screen call screen over the
   lock screen when allowed (see Permissions above).
 - **Connected**: voice is not in this step. **Send 5 test frames** sends the
@@ -125,7 +128,11 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   terminal. The terminal doesn't queue events while no phone is connected, so on
   reconnecting the app reads STATUS and shows where the call is; a call that
   started while the phone was away shows as "Unknown caller" and can still be
-  answered or rejected.
+  answered or rejected. While the link is down the call screen offers
+  **Close** (its buttons can't reach the terminal); if the call is still up
+  when the terminal is back, it shows again. **Disconnect** (on the link
+  notification or the Terminal tab) ends the call on the phone ("the phone
+  was disconnected from the terminal"): nothing reconnects after that.
 
 ### Diagnostics
 
@@ -150,14 +157,32 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
 ## Known limitations
 
 - **BLE pairing and encryption aren't implemented yet.** The BLE link
-  between the phone and the terminal is neither paired nor encrypted:
-  anyone in BLE range can write COMMANDs — including DEACTIVATE, which wipes
-  the terminal's keys — or UP frames. How to secure the hop (bonding, a
+  between the phone and the terminal is neither paired nor encrypted, so
+  anyone in BLE range can:
+  - write COMMANDs — including DEACTIVATE, which wipes the terminal's
+    keys — or UP frames;
+  - read STATUS and receive EVENT and DOWN notifications: the terminal's
+    number, callers' and called numbers, call progress and causes, and the
+    in-call app data (the radio hop encrypts it in Part 15; the BLE hop
+    doesn't);
+  - sniff the activation code. The network keys never cross BLE, but the
+    `opencell:1:` text does, once, at activation, and it carries the token
+    secret: it *is* the activation credential. Someone capturing it could
+    race the terminal to activate with it (the network accepts each code
+    once).
+
+  The app also doesn't authenticate the terminal: any device advertising
+  the OpenCell service UUID shows up in the list, and a code scanned while
+  connected to it would be sent to it. Connect only to the terminal you
+  expect (its name ends in its TMID). How to secure the hop (bonding, a
   pairing window) is an open decision; see `security-model.md`'s "BLE hop
-  (terminal ↔ phone)" section on the `lc-sig` branch. The keys themselves
-  never cross BLE: the QR text does, once, at activation.
+  (terminal ↔ phone)" section on the `lc-sig` branch.
 - **Voice isn't in this step.** A connected call has the data-frame test
   above, not audio; see Architecture below for where the codec plugs in.
+- **QR scanning costs APK size.** CameraX and ZXing add about 8.8 MB to the
+  unminified release APK (24.5 → 33.3 MB) and 10.8 MB to the debug APK
+  (32.0 → 42.8 MB), measured by building the commits before and after QR
+  scanning was added (035e598, a270aba). Minification is off.
 
 ## Architecture
 
@@ -196,3 +221,10 @@ The voice codec will plug into `TerminalLink` next to `PhoneSession`: it should
 write once per 120 ms frame between CONNECTED and ENDED and drop a frame on
 0x80 instead of retrying, because a late voice frame is useless. Codec2 1200
 packs three 40 ms frames into 18 bytes, one app data frame per radio frame.
+
+## Third-party notices
+
+QR codes are decoded with [ZXing](https://github.com/zxing/zxing) (`com.google.zxing:core`),
+Copyright ZXing authors, licensed under the Apache License, Version 2.0
+(https://www.apache.org/licenses/LICENSE-2.0). The camera viewfinder uses
+AndroidX CameraX, also Apache-2.0.
