@@ -1,5 +1,11 @@
 package org.opencell.app.ui
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -44,9 +50,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.app.ui.theme.CallGreen
 import org.opencell.app.ui.theme.MonoStyle
@@ -289,6 +297,34 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
         }
     }
     Dialer(vm, enabled = phone.canDial)
+    CallReadiness(vm)
+}
+
+/** What the phone needs to ring for incoming calls while the app is in the background. */
+@Composable
+private fun CallReadiness(vm: MainViewModel) {
+    val env = vm.environment
+    val context = LocalContext.current
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.refreshEnvironment() }
+    if (!env.notificationsAllowed) {
+        NoticeCard(
+            title = "Notifications are off",
+            text = "Without them the phone can't ring for incoming calls while the app is in the background.",
+            action = "Allow",
+            onAction = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) },
+        )
+    } else if (!env.fullScreenCalls && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        NoticeCard(
+            title = "Incoming calls on the lock screen",
+            text = "Allow OpenCell to show incoming calls full screen. Otherwise they only show as a notification.",
+            action = "Allow",
+            onAction = {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()),
+                )
+            },
+        )
+    }
 }
 
 @Composable

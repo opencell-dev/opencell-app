@@ -3,6 +3,7 @@ package org.opencell.app.ui
 import android.Manifest
 import android.app.Application
 import android.bluetooth.BluetoothManager
+import android.os.Build
 import android.os.PowerManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -11,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import org.opencell.app.ble.BlePermissions
 import org.opencell.app.ble.ScannedDevice
 import org.opencell.app.graph
+import org.opencell.app.service.CallNotifier
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.loopback.LoopbackConfig
 import org.opencell.core.protocol.ActivationQr
@@ -29,6 +31,10 @@ data class Environment(
     val bluetoothOn: Boolean = false,
     val batteryUnrestricted: Boolean = false,
     val cameraPermission: Boolean = false,
+    /** POST_NOTIFICATIONS (Android 13+): needed to ring while the app is in the background. */
+    val notificationsAllowed: Boolean = true,
+    /** Android 14+: the user allows full-screen incoming-call screens (USE_FULL_SCREEN_INTENT). */
+    val fullScreenCalls: Boolean = true,
 )
 
 /** The console input parsed into bytes, or why it can't be sent. */
@@ -67,6 +73,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             batteryUnrestricted = ctx.getSystemService(PowerManager::class.java)
                 .isIgnoringBatteryOptimizations(ctx.packageName),
             cameraPermission = BlePermissions.has(ctx, Manifest.permission.CAMERA),
+            notificationsAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                BlePermissions.has(ctx, Manifest.permission.POST_NOTIFICATIONS),
+            fullScreenCalls = CallNotifier(ctx).canUseFullScreenIntent(),
         )
     }
 

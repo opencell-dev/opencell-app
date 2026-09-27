@@ -11,28 +11,38 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.opencell.app.R
 import org.opencell.app.graph
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.link.LinkState
+import org.opencell.core.phone.CallPhase
+import org.opencell.core.phone.PhoneState
+import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.TerminalStatus
 
 /**
  * Foreground service (type `connectedDevice`) that keeps the process alive,
  * and so the BLE link, while the screen is off or the app is in the
  * background. The link itself lives in the app-scoped repository; this
- * service only holds the process in the foreground and shows the ongoing
- * notification. It stops itself when the user disconnects.
+ * service holds the process in the foreground, shows the ongoing
+ * notification, and posts the incoming-call notification ([CallNotifier])
+ * while a call rings and no app screen is visible. It stops itself when the
+ * user disconnects.
  */
 class LinkService : LifecycleService() {
     private var watching = false
+    private val callNotifier by lazy { CallNotifier(this) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -75,26 +85,36 @@ class LinkService : LifecycleService() {
     private fun watch() {
         val repo = graph.repository
         val link = graph.session.link
+        val phone = graph.session.phone
         lifecycleScope.launch {
             repo.wanted.first { it == null }
             stop()
         }
         lifecycleScope.launch {
-            combine(link.state, link.status) { s, st -> s to st }
+            combine(link.state, link.status, phone.state) { s, st, p -> Triple(s, st, p) }
                 .conflate()
-                .collect { (s, st) ->
-                    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(s, st))
+                .collect { (s, st, p) ->
+                    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(s, st, p))
                     delay(1000) // at most one notification update per second
                 }
+        }
+        lifecycleScope.launch {
+            // Ring in the background only: with an app screen visible, the in-app call screen shows it.
+            val visible = ProcessLifecycleOwner.get().lifecycle.currentStateFlow.map { it.isAtLeast(Lifecycle.State.STARTED) }
+            val ringing = phone.state.map { it.call?.takeIf { c -> c.phase == CallPhase.INCOMING } }
+            combine(ringing, visible) { call, fg -> if (fg) null else call }
+                .distinctUntilChanged()
+                .collect { call -> if (call != null) callNotifier.showIncoming(call) else callNotifier.cancel() }
         }
     }
 
     private fun stop() {
+        callNotifier.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun notification(state: LinkState, status: TerminalStatus?): Notification {
+    private fun notification(state: LinkState, status: TerminalStatus?, phone: PhoneState? = null): Notification {
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
@@ -109,7 +129,16 @@ class LinkService : LifecycleService() {
         val text = when (state) {
             LinkState.Disconnected -> "Starting…"
             is LinkState.Connecting -> "Connecting…"
-            is LinkState.Connected -> status?.let { "${it.stateLabel} · ${it.bandLabel} · ${it.rssiDbm} dBm" } ?: "Connected"
+            is LinkState.Connected -> {
+                val call = phone?.activeCall
+                val sig = phone?.sig
+                when {
+                    call != null -> call.phase.label + (call.peer?.let { " · " + PhoneNumber.display(it) } ?: "")
+                    sig != null -> sig.label + (phone.number?.let { " · " + PhoneNumber.display(it) } ?: "") +
+                        (status?.let { " · ${it.rssiDbm} dBm" } ?: "")
+                    else -> status?.let { "${it.stateLabel} · ${it.bandLabel} · ${it.rssiDbm} dBm" } ?: "Connected"
+                }
+            }
             is LinkState.WaitingToReconnect -> "Link lost, retrying in ${state.delay.inWholeSeconds.coerceAtLeast(1)} s"
         }
         val open = PendingIntent.getActivity(

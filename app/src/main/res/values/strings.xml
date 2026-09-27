@@ -4,4 +4,6 @@
     <string name="channel_link">Terminal link</string>
     <string name="channel_link_description">Shown while the app keeps a BLE link to an OpenCell terminal</string>
     <string name="disconnect">Disconnect</string>
+    <string name="channel_calls">Incoming calls</string>
+    <string name="channel_calls_description">Rings for calls to your OpenCell number while the app is in the background</string>
 </resources>
