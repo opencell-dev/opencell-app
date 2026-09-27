@@ -96,14 +96,46 @@ class PhoneSessionTest {
     fun refusedCommandShowsWhyAndRereadsStatus() = runTest {
         val h = harness()
         h.link.commandResults += WriteResult.NotNow
-        h.link.statusFlow.value = status(SigState.REGISTERED)
+        // Only the fresh read (not the ambient STATUS notification, which never
+        // changes from harness()'s REGISTERED) reflects this: proves the refusal
+        // actually triggered a re-read rather than just showing the notice.
+        h.link.refreshOverride = status(SigState.RINGING_OUT)
         h.phone.answer()
         runCurrent()
         assertEquals("There is no incoming call to answer", h.phone.state.value.notice)
         assertNull(h.phone.state.value.call)
+        assertEquals(SigState.RINGING_OUT, h.phone.state.value.sig)
         assertTrue(h.log.contains("ERROR COMMAND ANSWER: not now (0x80)"))
         h.phone.clearNotice()
         assertNull(h.phone.state.value.notice)
+    }
+
+    @Test
+    fun aRefusedAnswerReReadsStatusInsteadOfResyncingSoTheIncomingCallSurvives() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        runCurrent()
+        h.link.commandResults += WriteResult.NotNow
+        // The fresh read still shows RINGING_IN: a plain re-read must not erase
+        // the call's id/caller the way a full Resync would.
+        h.link.refreshOverride = status(SigState.RINGING_IN)
+        h.phone.answer()
+        runCurrent()
+        val call = h.phone.state.value.call
+        assertEquals(7L, call?.id)
+        assertEquals(peer, call?.peer)
+        assertEquals(CallPhase.INCOMING, call?.phase)
+    }
+
+    @Test
+    fun duplicateInFlightCommandIsIgnored() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        runCurrent()
+        h.phone.answer()
+        h.phone.answer() // a second ANSWER while the first hasn't been written yet
+        runCurrent()
+        assertEquals(1, h.link.commands.size)
     }
 
     @Test
@@ -216,6 +248,100 @@ class PhoneSessionTest {
         assertEquals(CallData(sent = 3, received = 3, testFramesReceived = 3, lastReceivedHex = "b0 02 6f 63 2d 73 65 6e 64"), h.phone.callData.value)
         assertTrue(h.log.any { it.startsWith("UP UP test frame 0: sent") })
         assertEquals(ConsoleKind.UP.name, h.log.last { it.contains("test frame 2") }.substringBefore(' '))
+    }
+
+    @Test
+    fun endingTheCallStopsTestFramesImmediatelyWithNoMoreUpWrites() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        runCurrent()
+        // The first frame is refused (0x80): retrying it (as UplinkSender would)
+        // means a write is still pending, backed off, when the call ends.
+        h.link.results += WriteResult.NotNow
+        h.phone.sendTestFrames(count = 5, interval = 200.milliseconds)
+        runCurrent()
+        assertEquals(1, h.link.writes.size) // the one (refused) attempt at frame 0
+        h.link.emitEvent(TerminalEvent.Ended(3, 0))
+        runCurrent()
+        advanceTimeBy(5_000) // well past any retry backoff and the per-frame interval
+        assertEquals(1, h.link.writes.size) // no retried or further frame goes out after ENDED
+    }
+
+    @Test
+    fun aRefusedTestFrameIsDroppedNotRetried() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        runCurrent()
+        h.link.results += WriteResult.NotNow
+        h.phone.sendTestFrames(count = 3, interval = 10.milliseconds)
+        advanceTimeBy(1_000)
+        assertEquals(3, h.link.writes.size) // one write attempt per frame, no retry for the refused one
+        assertEquals(CallData(sent = 2, failed = 1), h.phone.callData.value)
+    }
+
+    @Test
+    fun linkGoingDownCancelsAnOutstandingTestFrameSend() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        runCurrent()
+        h.phone.sendTestFrames(count = 5, interval = 200.milliseconds)
+        runCurrent()
+        assertEquals(1, h.link.writes.size)
+        h.link.stateFlow.value = LinkState.WaitingToReconnect(LinkTarget(address, null), 1, 1000.milliseconds, "supervision timeout")
+        runCurrent()
+        advanceTimeBy(2_000)
+        assertEquals(1, h.link.writes.size)
+    }
+
+    @Test
+    fun aSecondSendTestFramesWhileOneIsRunningIsIgnored() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        runCurrent()
+        val first = h.phone.sendTestFrames(count = 5, interval = 200.milliseconds)
+        runCurrent()
+        val second = h.phone.sendTestFrames(count = 5, interval = 200.milliseconds)
+        assertNull(second)
+        assertEquals("Test frames are already going out", h.phone.state.value.notice)
+        assertTrue(first!!.isActive)
+    }
+
+    @Test
+    fun closeCancelsAnOutstandingTestFrameSend() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(3, peer))
+        h.link.emitEvent(TerminalEvent.Connected(3, 1))
+        runCurrent()
+        h.phone.sendTestFrames(count = 5, interval = 200.milliseconds)
+        runCurrent()
+        assertEquals(1, h.link.writes.size)
+        h.phone.close()
+        runCurrent()
+        advanceTimeBy(2_000)
+        assertEquals(1, h.link.writes.size)
+    }
+
+    @Test
+    fun connectingToADifferentTerminalResetsPhoneState() = runTest {
+        val h = harness(SigState.REGISTERED)
+        h.link.emitEvent(TerminalEvent.Registered(me, 1))
+        runCurrent()
+        assertEquals(me, h.phone.state.value.number)
+        h.link.stateFlow.value = LinkState.WaitingToReconnect(LinkTarget(address, null), 1, 1000.milliseconds, "supervision timeout")
+        runCurrent()
+        assertFalse(h.phone.state.value.linkUp)
+        // Reconnects, but to a different terminal (a different BLE address): terminal A's
+        // number must not show up as if it belonged to B.
+        h.link.stateFlow.value = LinkState.Connected(LinkTarget("CC:DD", null), 247)
+        runCurrent()
+        val s = h.phone.state.value
+        assertTrue(s.linkUp)
+        assertEquals(SigState.REGISTERED, s.sig)
+        assertNull(s.number)
     }
 
     private companion object {

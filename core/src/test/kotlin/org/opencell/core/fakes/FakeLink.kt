@@ -49,6 +49,14 @@ class FakeLink(
     /** When true, [refreshStatus] fails (returns null) without disturbing [statusFlow]'s cached value. */
     var refreshFails: Boolean = false
 
+    /**
+     * When non-null, [refreshStatus] returns this instead of [statusFlow]'s value, without
+     * disturbing [statusFlow] (and so without the ambient STATUS-notification collector seeing
+     * it). Lets a test prove a fresh read happened, rather than the state having come from the
+     * STATUS notification that's always live on [statusFlow].
+     */
+    var refreshOverride: TerminalStatus? = null
+
     val commands = mutableListOf<ByteArray>()
     val commandResults = ArrayDeque<WriteResult>()
 
@@ -89,5 +97,9 @@ class FakeLink(
         check(_downlink.tryEmit(Downlink(payload, timeSource.markNow(), 0L)))
     }
 
-    override suspend fun refreshStatus(): TerminalStatus? = if (refreshFails) null else statusFlow.value
+    override suspend fun refreshStatus(): TerminalStatus? = when {
+        refreshFails -> null
+        refreshOverride != null -> refreshOverride
+        else -> statusFlow.value
+    }
 }

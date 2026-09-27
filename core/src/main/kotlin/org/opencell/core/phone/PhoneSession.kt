@@ -11,7 +11,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.opencell.core.link.LinkState
-import org.opencell.core.link.SendOutcome
 import org.opencell.core.link.TerminalLink
 import org.opencell.core.link.UplinkSender
 import org.opencell.core.link.WriteResult
@@ -60,10 +59,17 @@ data class CallData(
  * The phone side of the terminal: activation, registration and calls.
  * The terminal runs all signalling; this sends COMMANDs, follows EVENTs and
  * STATUS byte 3 through [PhoneReducer], and resyncs from STATUS every time the
- * link comes up, because the terminal drops EVENTs while no phone is connected.
+ * link comes up (for a new terminal address, from a blank [PhoneState]: this
+ * one [TerminalSession][org.opencell.core.session.TerminalSession] can serve
+ * any scanned device in turn, and nothing here may carry over between them),
+ * because the terminal drops EVENTs while no phone is connected.
  *
  * Commands are never retried: ATT 0x80 means the terminal is in another state
- * than the app thought, so the app shows why and reads STATUS again.
+ * than the app thought. It re-reads STATUS and applies it as an ordinary
+ * [PhoneInput.Status] (not a full [PhoneInput.Resync]: that would erase an
+ * INCOMING call's id/caller and interrupt an in-progress activation, which a
+ * mere command refusal hasn't earned); if that read fails, nothing changes.
+ * A command identical to one already in flight is ignored rather than queued.
  *
  * The firmware only notifies STATUS on change and can drop EVENTs, so
  * [PhoneReducer] can hold a disagreeing STATUS back for
@@ -93,6 +99,15 @@ class PhoneSession(
     /** The single scheduled [PhoneInput.Tick] for a STATUS held back by the grace, if any. */
     private var pendingTick: Job? = null
 
+    /** The running [sendTestFrames] job, if any: at most one at a time (see [sendTestFrames]). */
+    private var dataJob: Job? = null
+
+    /** Commands currently being written, so a duplicate is ignored rather than queued behind it. */
+    private val inFlight = mutableSetOf<Command>()
+
+    /** The BLE address this session last resynced against, so a different one triggers a reset. */
+    private var lastAddress: String? = null
+
     init {
         scope.launch {
             link.events.collect { e ->
@@ -105,7 +120,11 @@ class PhoneSession(
         }
         scope.launch {
             link.state.collect { s ->
-                if (s is LinkState.Connected) resync() else if (_state.value.linkUp) apply(PhoneInput.LinkDown)
+                if (s is LinkState.Connected) {
+                    onConnected(s.target.address)
+                } else if (_state.value.linkUp) {
+                    apply(PhoneInput.LinkDown)
+                }
             }
         }
         scope.launch {
@@ -148,43 +167,112 @@ class PhoneSession(
      * Sends [count] test frames ([testFrame]) [interval] apart, like the laptop
      * client's `send` step. App data goes out only in a connected call: outside
      * one it would be refused (no grant) and would travel unencrypted.
+     *
+     * Each frame is written once directly (no [UplinkSender] retries: a late
+     * test frame is as worthless as a late voice frame would be) and only
+     * after checking the call is still connected; a 0x80 just drops that one
+     * frame. At most one send runs at a time: calling this again while one is
+     * already running is ignored (a notice is shown) rather than starting a
+     * second, overlapping one. The running job is also cancelled the moment
+     * the call leaves CONNECTED, on [PhoneInput.LinkDown], or on [close].
      */
     fun sendTestFrames(count: Int = 5, interval: Duration = 200.milliseconds): Job? {
         if (_state.value.call?.phase != CallPhase.CONNECTED) {
             apply(PhoneInput.Notice("Test frames only go out during a connected call"))
             return null
         }
-        return scope.launch {
-            for (i in 0 until count) {
-                if (_state.value.call?.phase != CallPhase.CONNECTED) break
-                val frame = testFrame(i)
-                val out = sender.send(frame)
-                _callData.update { if (out is SendOutcome.Sent) it.copy(sent = it.sent + 1) else it.copy(failed = it.failed + 1) }
-                log(if (out is SendOutcome.Sent) ConsoleKind.UP else ConsoleKind.ERROR, "UP test frame $i: ${out.label}")
-                if (i < count - 1) delay(interval)
+        synchronized(lock) {
+            if (dataJob?.isActive == true) {
+                apply(PhoneInput.Notice("Test frames are already going out"))
+                return null
             }
+            val job = scope.launch {
+                for (i in 0 until count) {
+                    if (_state.value.call?.phase != CallPhase.CONNECTED) break
+                    val frame = testFrame(i)
+                    val out = link.writeUp(frame)
+                    val sent = out == WriteResult.Accepted
+                    _callData.update { if (sent) it.copy(sent = it.sent + 1) else it.copy(failed = it.failed + 1) }
+                    log(if (sent) ConsoleKind.UP else ConsoleKind.ERROR, "UP test frame $i: ${if (sent) "sent" else out.label}")
+                    if (i < count - 1) delay(interval)
+                }
+            }
+            dataJob = job
+            job.invokeOnCompletion { synchronized(lock) { if (dataJob === job) dataJob = null } }
+            return job
         }
     }
 
-    private fun command(cmd: Command, onAccepted: () -> Unit): Job = scope.launch {
-        commandLock.withLock {
-            val r = link.writeCommand(cmd.encode())
-            log(if (r == WriteResult.Accepted) ConsoleKind.INFO else ConsoleKind.ERROR, "COMMAND ${cmd.label}: ${r.label}")
-            if (r == WriteResult.Accepted) {
-                onAccepted()
-            } else {
-                apply(PhoneInput.Notice(refusal(cmd, r)))
-                if (r == WriteResult.NotNow) resync()
+    /** Cancels an outstanding [sendTestFrames] run, if any. Call when tearing this session down. */
+    fun close() {
+        synchronized(lock) {
+            dataJob?.cancel()
+            dataJob = null
+            pendingTick?.cancel()
+            pendingTick = null
+        }
+    }
+
+    private fun command(cmd: Command, onAccepted: () -> Unit): Job {
+        val started = synchronized(lock) { inFlight.add(cmd) }
+        if (!started) return Job().apply { complete() }
+        return scope.launch {
+            try {
+                commandLock.withLock {
+                    val r = link.writeCommand(cmd.encode())
+                    log(if (r == WriteResult.Accepted) ConsoleKind.INFO else ConsoleKind.ERROR, "COMMAND ${cmd.label}: ${r.label}")
+                    if (r == WriteResult.Accepted) {
+                        onAccepted()
+                    } else {
+                        apply(PhoneInput.Notice(refusal(cmd, r)))
+                        if (r == WriteResult.NotNow) rereadStatus()
+                    }
+                }
+            } finally {
+                synchronized(lock) { inFlight.remove(cmd) }
             }
         }
     }
 
     /**
-     * Reads STATUS and reconciles with it (after connecting, and after a 0x80
-     * refusal). If the fresh read fails, this does NOT fall back to the link's
-     * last (possibly stale, pre-disconnect) STATUS: it only updates [PhoneState.linkUp]
-     * and leaves the rest as it is, trusting the next STATUS notification or
-     * the next connect's resync to catch up.
+     * After a 0x80 refusal, re-reads STATUS and applies it as an ordinary
+     * [PhoneInput.Status]: the command's target may just be a step behind, not
+     * lost entirely, so this must not erase an INCOMING call's id/caller or
+     * interrupt an in-progress activation the way [resync] (a full [PhoneInput.Resync])
+     * would. If the read fails, nothing changes.
+     */
+    private suspend fun rereadStatus() {
+        val sig = link.refreshStatus()?.sig ?: return
+        apply(PhoneInput.Status(sig))
+    }
+
+    /**
+     * The link came up for [address]. If it's a different terminal than the
+     * one this session last talked to, everything here (state and in-call
+     * data) is reset first: nothing about terminal A may carry over to B.
+     * Either way, [resync] then reads STATUS fresh for whichever terminal it is.
+     */
+    private suspend fun onConnected(address: String) {
+        if (lastAddress != null && lastAddress != address) {
+            synchronized(lock) {
+                dataJob?.cancel()
+                dataJob = null
+                pendingTick?.cancel()
+                pendingTick = null
+                _state.value = PhoneState()
+                _callData.value = CallData()
+            }
+        }
+        lastAddress = address
+        resync()
+    }
+
+    /**
+     * Reads STATUS and reconciles with it (after connecting). If the fresh
+     * read fails, this does NOT fall back to the link's last (possibly stale,
+     * pre-disconnect) STATUS: it only updates [PhoneState.linkUp] and leaves
+     * the rest as it is, trusting the next STATUS notification or the next
+     * connect's resync to catch up.
      */
     private suspend fun resync() {
         val sig = link.refreshStatus()?.sig
@@ -203,6 +291,10 @@ class PhoneSession(
             val after = PhoneReducer.reduce(before, input, clock())
             _state.value = after
             if (before.call?.phase != CallPhase.CONNECTED && after.call?.phase == CallPhase.CONNECTED) _callData.value = CallData()
+            if (dataJob != null && (after.call?.phase != CallPhase.CONNECTED || !after.linkUp)) {
+                dataJob?.cancel()
+                dataJob = null
+            }
             scheduleReconcile(after)
             val address = address() ?: return
             if (after.sig == SigState.NOT_ACTIVATED) {
