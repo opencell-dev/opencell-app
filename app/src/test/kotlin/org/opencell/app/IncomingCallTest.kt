@@ -78,6 +78,21 @@ class IncomingCallTest {
     }
 
     @Test
+    fun doesNotSuppressAlertingViaGrouping() {
+        // androidx.core's setSilent(true), with no group key set, implicitly groups the
+        // notification and sets GROUP_ALERT_SUMMARY on a non-summary notification: the
+        // framework's suppressAlertingDueToGrouping() then returns true, and on Android 13+
+        // SystemUI suppresses the heads-up and the full-screen intent — a locked phone rings
+        // but no call screen appears. The channel already carries no sound or vibration, and
+        // setOnlyAlertOnce keeps a later update quiet, so the notification itself must not
+        // silence or group itself.
+        val posted = CallNotifier(app).build(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        assertNull("no implicit group key", posted.group)
+        assertEquals(Notification.GROUP_ALERT_ALL, posted.groupAlertBehavior)
+        assertNotNull(posted.fullScreenIntent)
+    }
+
+    @Test
     fun ensureChannelReplacesTheOldSoundedChannel() {
         nm.createNotificationChannel(
             android.app.NotificationChannel("calls", "Old calls channel", NotificationManager.IMPORTANCE_HIGH).apply {

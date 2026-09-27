@@ -115,6 +115,20 @@ class LinkService : LifecycleService() {
         stopSelf()
     }
 
+    /**
+     * The last line of defence against a looping ringtone or repeating
+     * vibration outliving the service: [stop] already does this on the
+     * ordinary disconnect path, but the service can also be destroyed
+     * other ways (e.g. [goForeground] failing on a later start calls
+     * `stopSelf()` directly), and neither of those must leave the phone
+     * ringing forever.
+     */
+    override fun onDestroy() {
+        callRinger.stop()
+        callNotifier.cancel()
+        super.onDestroy()
+    }
+
     private fun notification(state: LinkState, status: TerminalStatus?, phone: PhoneState? = null): Notification {
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {

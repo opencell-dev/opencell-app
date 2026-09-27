@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -22,8 +23,6 @@ import android.util.Log
  */
 class CallRinger(private val context: Context) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
-
-    @Suppress("DEPRECATION") // the per-app Vibrator, not VibratorManager: it's what the manager delegates to anyway
     private val vibrator = context.getSystemService(Vibrator::class.java)
     private var ringtone: Ringtone? = null
     private var ringing = false
@@ -49,9 +48,22 @@ class CallRinger(private val context: Context) {
         runCatching { vibrator?.cancel() }
     }
 
+    /**
+     * Without usage attributes on the vibration itself, Android doesn't apply the user's
+     * ring-vibration intensity setting or Do Not Disturb's call-vibration rules to it. The
+     * `AudioAttributes` overload is deprecated in favour of `VibrationAttributes`, but that one
+     * only exists from API 33; minSdk is 31, so 31-32 still need the older overload.
+     */
+    @Suppress("DEPRECATION")
     private fun vibrate() {
-        runCatching { vibrator?.vibrate(VibrationEffect.createWaveform(PATTERN, REPEAT_FROM_INDEX)) }
-            .onFailure { Log.w(TAG, "can't vibrate", it) }
+        runCatching {
+            val effect = VibrationEffect.createWaveform(PATTERN, REPEAT_FROM_INDEX)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                vibrator?.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE))
+            } else {
+                vibrator?.vibrate(effect, VIBRATION_AUDIO_ATTRIBUTES)
+            }
+        }.onFailure { Log.w(TAG, "can't vibrate", it) }
     }
 
     private fun playRingtone() {
@@ -59,7 +71,7 @@ class CallRinger(private val context: Context) {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE) ?: return
             ringtone = RingtoneManager.getRingtone(context, uri)?.apply {
                 audioAttributes = RINGTONE_ATTRIBUTES
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
+                isLooping = true
                 play()
             }
         }.onFailure { Log.w(TAG, "can't play the ringtone", it) }
@@ -74,6 +86,11 @@ class CallRinger(private val context: Context) {
         private val RINGTONE_ATTRIBUTES = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+
+        /** Pre-Android 13's way to say "this is the ring vibration" (13+ uses [VibrationAttributes] instead). */
+        private val VIBRATION_AUDIO_ATTRIBUTES = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
             .build()
     }
 }

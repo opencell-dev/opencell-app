@@ -20,9 +20,16 @@ import org.opencell.core.protocol.PhoneNumber
  * opens [CallActivity] over the lock screen. It carries no sound or
  * vibration of its own — [CallRinger] is the only ring source, driven by
  * [LinkService] regardless of which screen is visible — so its channel has
- * no sound and the notification itself is silent
- * ([NotificationCompat.Builder.setSilent]). It also times out on its own
- * after [TIMEOUT_MS], belt and braces in case a state change is ever missed.
+ * no sound and no vibration ([ensureChannel]), and [setOnlyAlertOnce] keeps a
+ * later update quiet. It deliberately does *not* call
+ * [NotificationCompat.Builder.setSilent]: with no group key set, that
+ * implicitly groups the notification and sets `GROUP_ALERT_SUMMARY` on it
+ * (androidx.core, API 26+), which makes the framework's
+ * `Notification.suppressAlertingDueToGrouping()` return true — and on
+ * Android 13+, SystemUI then suppresses both the heads-up and the
+ * full-screen intent, so a locked phone would ring with no call screen. It
+ * also times out on its own after [TIMEOUT_MS], belt and braces in case a
+ * state change is ever missed.
  */
 class CallNotifier(private val context: Context) {
     private val nm = context.getSystemService(NotificationManager::class.java)
@@ -69,7 +76,6 @@ class CallNotifier(private val context: Context) {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .setSilent(true) // CallRinger is the only sound/vibration source
             .setOnlyAlertOnce(true)
             .setTimeoutAfter(TIMEOUT_MS)
             .setContentIntent(fullScreen)
