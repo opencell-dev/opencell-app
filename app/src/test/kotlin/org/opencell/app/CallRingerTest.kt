@@ -1,6 +1,8 @@
 package org.opencell.app
 
+import android.Manifest
 import android.app.NotificationManager
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.VibrationAttributes
@@ -22,6 +24,13 @@ class CallRingerTest {
     private val app: OpenCellApplication get() = ApplicationProvider.getApplicationContext()
     private val audioManager get() = app.getSystemService(AudioManager::class.java)
     private val vibrator get() = app.getSystemService(Vibrator::class.java)
+
+    /** Robolectric doesn't enforce it, but a phone throws SecurityException from vibrate() without it. */
+    @Test
+    fun theManifestRequestsVibrate() {
+        val info = app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS)
+        assertTrue(info.requestedPermissions.orEmpty().contains(Manifest.permission.VIBRATE))
+    }
 
     @Test
     fun normalModeVibratesAndStopsOnStop() {
