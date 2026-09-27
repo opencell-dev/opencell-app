@@ -102,16 +102,18 @@ also do all of the following:
   themselves.)
 - **Demo terminal** is a simulated terminal and network, for trying everything
   without hardware. It offers **Use a demo code** for activation, its test peer
-  (**Test peer**, +883 606 555 0100) answers after 3 s, calling your own number
-  is busy, and +883 606 555 9999 is unreachable.
+  (**Test peer**, +883-1-606-555-00100) answers after 3 s, calling your own
+  number is busy, and +883-1-606-555-09999 is unreachable.
 
 ### Activate (Phone tab)
 
-1. Get a code: from the portal, or on the bench `lcbench mkqr --number +883…`
-   (it prints the QR code and the `opencell:1:…` text).
+1. Get a code: from the portal, or on the bench
+   `lcbench mkqr --number +883-1-606-555-01234` (it prints the QR code and the
+   `opencell:2:…` text). A code from before numbering v2 (`opencell:1:…`) is
+   refused: ask for a new one.
 2. **Scan QR code**, or paste the text and tap **Check code**. The app checks the
-   code exactly like the terminal (prefix, length, base64url, version, CRC) and
-   shows its number and expiry before sending anything.
+   code exactly like the terminal (prefix, length, base64url, version, reserved
+   bytes, CRC, number) and shows its number and expiry before sending anything.
 3. **Activate**. The terminal agrees its keys with the network (a few seconds),
    then registers. Failures say why: unknown code, code already used, expired,
    bad tag, or no answer from the network.
@@ -123,7 +125,14 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
 
 ### Calls
 
-- **Make a call**: type a +883 number (spaces and dashes are fine) and tap **Call**.
+- **Make a call**: type the number and tap **Call**. In your own country the
+  national number is enough: `606-555-01234`, or `606-555-1234` (a leading 0 of
+  the 5-digit subscriber number can be left out); from anywhere, the full
+  `+883-1-606-555-01234`. Spaces, dashes, dots and parentheses are fine. The
+  line under the field shows the full number that will be dialled
+  (`numbering-plan.md`). OpenCell carries no emergency calls: 911, 112 and 999
+  are refused.
+  Numbers are shown in the international form, `+883-1-606-555-01234`.
   The call screen shows Calling, Ringing, Connected, and at the end the cause
   (busy, no answer, unreachable, rejected, link lost…).
 - **Incoming**: the phone rings itself — a looping ringtone and vibration
