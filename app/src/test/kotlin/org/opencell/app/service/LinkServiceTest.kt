@@ -2,6 +2,7 @@ package org.opencell.app.service
 
 import android.content.Intent
 import android.media.AudioManager
+import android.os.Looper
 import android.os.Vibrator
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -20,7 +21,7 @@ import org.opencell.core.sim.SimulatedTerminal
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
 
-/** [LinkService] stops ringing no matter how the service is destroyed. */
+/** [LinkService]'s ring collector, and that it stops ringing no matter how the service is destroyed. */
 @RunWith(AndroidJUnit4::class)
 class LinkServiceTest {
     private val app: OpenCellApplication get() = ApplicationProvider.getApplicationContext()
@@ -45,8 +46,8 @@ class LinkServiceTest {
     fun onDestroyStopsTheRingerAndTheNotificationEvenWithoutAnOrdinaryStop() {
         app.getSystemService(AudioManager::class.java).ringerMode = AudioManager.RINGER_MODE_VIBRATE
         // Set up the ringing call *before* the service starts: LinkService's collector's first,
-        // synchronous subscription then already sees it ringing, without depending on a live
-        // update reaching it later (see task-11-report.md's fix-round-1 note on lifecycleScope).
+        // synchronous subscription then already sees it ringing (a live update reaching it later,
+        // with the main looper idled, is covered by the test below).
         app.graph.repository.connect(LinkTarget(SimulatedTerminal.ADDRESS, "Demo terminal"))
         waitFor("not activated") { phone.state.value.linkUp && phone.state.value.sig == SigState.NOT_ACTIVATED }
         phone.activate((ActivationQr.parse(app.graph.simulator.demoQrText()) as QrParse.Ok).qr)
@@ -66,5 +67,39 @@ class LinkServiceTest {
 
         assertTrue("the vibration is cancelled", shadowOf(vibrator).isCancelled)
         assertFalse("the call notification is gone", shadowOf(nm).getNotification(CallNotifier.NOTIFICATION_ID) != null)
+    }
+
+    /**
+     * The ring collector itself, live: a call that arrives while the service runs starts the
+     * ringer and posts the notification, and rejecting it stops both. lifecycleScope runs on the
+     * main looper, which Robolectric runs when the test idles it.
+     */
+    @Test
+    fun ringsAndNotifiesForACallThatArrivesWhileTheServiceRunsAndStopsWhenItEnds() {
+        app.getSystemService(AudioManager::class.java).ringerMode = AudioManager.RINGER_MODE_VIBRATE
+        app.graph.repository.connect(LinkTarget(SimulatedTerminal.ADDRESS, "Demo terminal"))
+        waitFor("not activated") { phone.state.value.linkUp && phone.state.value.sig == SigState.NOT_ACTIVATED }
+        phone.activate((ActivationQr.parse(app.graph.simulator.demoQrText()) as QrParse.Ok).qr)
+        waitFor("registered") { phone.state.value.sig == SigState.REGISTERED }
+
+        val controller = Robolectric.buildService(LinkService::class.java, Intent(app, LinkService::class.java)).create()
+        controller.get().onStartCommand(Intent(app, LinkService::class.java), 0, 0)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("no call, no ring", shadowOf(vibrator).isVibrating)
+
+        assertTrue(app.graph.simulator.incomingCall(SimulatedTerminal.PEER))
+        waitFor("ringing") { phone.state.value.call?.phase == CallPhase.INCOMING }
+        waitFor("the ringer to start") {
+            shadowOf(Looper.getMainLooper()).idle()
+            shadowOf(vibrator).isVibrating
+        }
+        assertTrue("the call notification is posted", shadowOf(nm).getNotification(CallNotifier.NOTIFICATION_ID) != null)
+
+        phone.reject()
+        waitFor("rejected") { phone.state.value.call?.phase == CallPhase.ENDED }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("the vibration is cancelled", shadowOf(vibrator).isCancelled)
+        assertFalse("the call notification is gone", shadowOf(nm).getNotification(CallNotifier.NOTIFICATION_ID) != null)
+        controller.destroy()
     }
 }

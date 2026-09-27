@@ -1,6 +1,8 @@
 package org.opencell.app
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -75,5 +77,37 @@ class CallScreensTest {
         compose.waitForText("Incoming call")
         compose.onNodeWithText("Reject").performClick()
         compose.waitForText("Call rejected")
+    }
+
+    /**
+     * C1: while the link is down the call's buttons can't reach the terminal, so the call screen
+     * offers Close; closing drops the local call, and the next resync brings it back if it's still up.
+     */
+    @Test
+    fun callScreenOffersCloseWhileTheLinkIsDown() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        assertTrue(sim.incomingCall("+8836065550100"))
+        compose.waitForText("Incoming call")
+        sim.dropLink()
+        compose.waitForText("The phone lost the terminal")
+        compose.onNodeWithText("Close").performClick()
+        compose.onAllNodesWithText("Incoming call").assertCountEquals(0)
+        // The call is still ringing in the terminal: the reconnect's resync shows it again.
+        compose.waitForText("Incoming call")
+        compose.onNodeWithText("Unknown caller").assertExists()
+    }
+
+    /** C1: Disconnect during a call (e.g. from the link notification) ends it on the phone; Close leaves the call screen. */
+    @Test
+    fun disconnectingDuringACallEndsItAndCloseLeavesTheCallScreen() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        assertTrue(sim.incomingCall("+8836065550100"))
+        compose.waitForText("Incoming call")
+        compose.activity.graph.repository.disconnect()
+        compose.waitForText("Call ended (the phone was disconnected from the terminal)")
+        compose.onNodeWithText("Close").performClick()
+        compose.waitForText("No terminal connected")
     }
 }

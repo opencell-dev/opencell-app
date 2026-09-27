@@ -41,6 +41,9 @@ import org.opencell.core.protocol.PhoneNumber
  * Outgoing, incoming, in-call and ended screens, shown full-screen over the app
  * whenever there is a call (and by CallActivity over the lock screen). Voice is
  * not in this step: a connected call offers the data-frame test instead.
+ * [onClose] closes an ended call, or any call while the link is down
+ * ([PhoneSession.dismissCall] drops it then; the next resync restores it if
+ * it is still up in the terminal).
  */
 @Composable
 fun CallScreen(session: PhoneSession, onClose: () -> Unit = session::dismissCall) {
@@ -78,15 +81,18 @@ fun CallScreen(session: PhoneSession, onClose: () -> Unit = session::dismissCall
                 call.connectedAt?.let { Text("Since ${clockTime(it)}", style = MaterialTheme.typography.bodyMedium) }
             }
             call.id?.let { Text("Call $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (!phone.linkUp) {
+            val linkLost = !phone.linkUp && call.phase != CallPhase.ENDED
+            if (linkLost) {
                 Text(
-                    "The phone lost the terminal; reconnecting. The call goes on in the terminal.",
+                    "The phone lost the terminal; reconnecting. The call goes on in the terminal. " +
+                        "Close hides it here; if it's still up when the terminal is back, it shows again.",
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center,
                 )
             }
             Spacer(Modifier.height(8.dp))
-            CallButtons(call, session, onClose)
+            // While the link is down the call's buttons can't reach the terminal: offer Close instead.
+            if (linkLost) OutlinedButton(onClick = onClose) { Text("Close") } else CallButtons(call, session, onClose)
             if (call.phase == CallPhase.CONNECTED) DataTest(data, onSend = { session.sendTestFrames() })
             phone.notice?.let { NoticeLine(it, onDismiss = session::clearNotice) }
         }

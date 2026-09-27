@@ -1,5 +1,6 @@
 package org.opencell.app.service
 
+import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
@@ -19,17 +20,23 @@ import android.util.Log
  * screen nor [org.opencell.app.ui.CallActivity] make any sound of their own,
  * so without this the phone would wake to a call it can't be heard ringing
  * for. Honours [AudioManager.getRingerMode]: SILENT rings neither, VIBRATE
- * only vibrates, NORMAL does both. [start] and [stop] are each idempotent.
+ * only vibrates, NORMAL does both. Honours Do Not Disturb too: while any
+ * interruption filter other than [NotificationManager.INTERRUPTION_FILTER_ALL]
+ * is on (read when the ring starts) it stays silent — the call notification
+ * still posts. [start] and [stop] are each idempotent.
  */
 class CallRinger(private val context: Context) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val vibrator = context.getSystemService(Vibrator::class.java)
+    private val notificationManager = context.getSystemService(NotificationManager::class.java)
     private var ringtone: Ringtone? = null
     private var ringing = false
 
     fun start() {
         if (ringing) return
         ringing = true
+        val filter = notificationManager?.currentInterruptionFilter ?: NotificationManager.INTERRUPTION_FILTER_ALL
+        if (filter != NotificationManager.INTERRUPTION_FILTER_ALL && filter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN) return
         when (audioManager?.ringerMode) {
             AudioManager.RINGER_MODE_SILENT -> Unit
             AudioManager.RINGER_MODE_VIBRATE -> vibrate()

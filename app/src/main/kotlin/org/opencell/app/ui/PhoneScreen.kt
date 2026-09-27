@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -50,7 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.app.ui.theme.CallGreen
@@ -81,8 +83,9 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     val link by vm.linkState.collectAsStateWithLifecycle()
     val wanted by vm.wanted.collectAsStateWithLifecycle()
     val phone by vm.phone.collectAsStateWithLifecycle()
-    var menu by remember { mutableStateOf(false) }
-    var confirmDeactivate by remember { mutableStateOf(false) }
+    // Saveable: folding or unfolding recreates the activity, and must not close these.
+    var menu by rememberSaveable { mutableStateOf(false) }
+    var confirmDeactivate by rememberSaveable { mutableStateOf(false) }
     val activated = phone.linkUp && phone.sig != null && phone.sig != SigState.NOT_ACTIVATED
 
     Scaffold(
@@ -187,10 +190,16 @@ private fun ActivationResult(vm: MainViewModel, phone: PhoneState) {
             LaunchedEffect(phone.sig) { if (phone.sig == SigState.REGISTERED) vm.finishActivation() }
             Text("Activated", style = MaterialTheme.typography.headlineSmall)
             Text("Number ${PhoneNumber.display(a.number)}", style = MaterialTheme.typography.titleMedium)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(12.dp))
-                Text("Registering with the network…")
+            val failure = phone.regFailureCode
+            if (failure == null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Registering with the network…")
+                }
+            } else {
+                RegistrationFailure(phone)
+                Button(onClick = vm::finishActivation) { Text("Continue") }
             }
         }
         is Activation.Failed -> {
@@ -292,17 +301,22 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
                 "Link",
                 (link.target?.name ?: "Terminal") + if (s != null) " · ${s.stateLabel} · ${s.rssiDbm} dBm" else "",
             )
-            phone.regFailure?.let {
-                Text(
-                    "Registration failed: ${it.text}. The terminal retries by itself.",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
+            RegistrationFailure(phone)
         }
     }
     Dialer(vm, enabled = phone.canDial)
     CallReadiness(vm)
+}
+
+/** The last REG_FAILED, while the terminal is still registering (it retries by itself). */
+@Composable
+private fun RegistrationFailure(phone: PhoneState) {
+    val code = phone.regFailureCode ?: return
+    Text(
+        "Registration failed: ${phone.regFailure?.text ?: "reason $code"}. The terminal retries by itself.",
+        color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodyMedium,
+    )
 }
 
 /** What the phone needs to ring for incoming calls while the app is in the background. */
@@ -310,7 +324,7 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
 private fun CallReadiness(vm: MainViewModel) {
     val env = vm.environment
     val context = LocalContext.current
-    var requestedNotifications by remember { mutableStateOf(false) }
+    var requestedNotifications by rememberSaveable { mutableStateOf(false) }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         requestedNotifications = true
         vm.refreshEnvironment()
@@ -322,9 +336,13 @@ private fun CallReadiness(vm: MainViewModel) {
             action = "Allow",
             onAction = {
                 val activity = context.findActivity()
-                // Below 13 there's no runtime permission to ask for; above it, a denial where the
-                // system says it won't show a rationale again means the user needs Settings instead.
-                val settingsOnly = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || (
+                // Below 13 there's no runtime permission to ask for; with the permission already
+                // granted, notifications (or the calls channel) are blocked in Settings; and a denial
+                // where the system won't show a rationale again means asking is pointless. All three
+                // need the app's notification settings, not a permission request.
+                val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                val settingsOnly = permissionGranted || (
                     requestedNotifications && activity != null &&
                         !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.POST_NOTIFICATIONS)
                     )
@@ -359,7 +377,7 @@ private fun CallReadiness(vm: MainViewModel) {
 }
 
 /** Walks the Context wrapper chain to find the hosting Activity: Compose's LocalContext may be wrapped. */
-private tailrec fun Context.findActivity(): Activity? = when (this) {
+internal tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null

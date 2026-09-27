@@ -1,5 +1,6 @@
 package org.opencell.app
 
+import android.app.NotificationManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.VibrationAttributes
@@ -73,5 +74,21 @@ class CallRingerTest {
         ringer.start() // idempotent: a second start doesn't restart the pattern or crash
         ringer.stop()
         assertTrue(shadowOf(vibrator).isCancelled)
+    }
+
+    /** I3: Do Not Disturb (any interruption filter but ALL) keeps the ring silent; the notification still posts. */
+    @Test
+    fun doNotDisturbSilencesTheRing() {
+        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+        val nm = app.getSystemService(NotificationManager::class.java)
+        nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+        try {
+            val ringer = CallRinger(app)
+            ringer.start()
+            assertFalse(shadowOf(vibrator).isVibrating)
+            ringer.stop()
+        } finally {
+            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+        }
     }
 }

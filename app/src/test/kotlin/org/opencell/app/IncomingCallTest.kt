@@ -3,12 +3,14 @@ package org.opencell.app
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
+import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -26,7 +28,9 @@ import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.protocol.SigState
 import org.opencell.core.sim.SimulatedTerminal
+import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
+import java.time.Duration
 
 /** The background path of an incoming call: the notification, and its Answer and Reject actions. */
 @RunWith(AndroidJUnit4::class)
@@ -159,5 +163,45 @@ class IncomingCallTest {
         CallActionReceiver().onReceive(app, Intent(CallActionReceiver.ACTION_REJECT))
         assertEquals(1, shadowOf(nm).allNotifications.size)
         notifier.cancel()
+    }
+
+    /** Runs what's queued on the main looper (lifecycleScope collectors) while waiting for [condition]. */
+    private fun waitForMain(what: String, condition: () -> Boolean) {
+        waitFor(what) {
+            shadowOf(Looper.getMainLooper()).idle()
+            condition()
+        }
+    }
+
+    /** M7: when CallActivity closes itself after ENDED it also dismisses the call, so MainActivity doesn't show "Call ended" again. */
+    @Test
+    fun callActivityDismissesTheEndedCallWhenItFinishesByItself() {
+        ringingDemoCall()
+        val controller = Robolectric.buildActivity(CallActivity::class.java, Intent(app, CallActivity::class.java)).setup()
+        val activity = controller.get()
+        phone.reject()
+        waitForMain("ended") { phone.state.value.call?.phase == CallPhase.ENDED }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(activity.isFinishing) // "Call ended" shows for a moment first
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
+        assertTrue(activity.isFinishing)
+        assertNull(phone.state.value.call)
+        controller.pause().stop().destroy()
+    }
+
+    /** Triage: a new INCOMING while CallActivity waits to close after ENDED cancels that close. */
+    @Test
+    fun aNewIncomingCallCancelsCallActivitysPendingFinish() {
+        ringingDemoCall()
+        val controller = Robolectric.buildActivity(CallActivity::class.java, Intent(app, CallActivity::class.java)).setup()
+        val activity = controller.get()
+        phone.reject()
+        waitForMain("ended") { phone.state.value.call?.phase == CallPhase.ENDED }
+        assertTrue(app.graph.simulator.incomingCall(SimulatedTerminal.PEER))
+        waitForMain("ringing again") { phone.state.value.call?.phase == CallPhase.INCOMING }
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
+        assertFalse(activity.isFinishing)
+        assertEquals(CallPhase.INCOMING, phone.state.value.call?.phase)
+        controller.pause().stop().destroy()
     }
 }

@@ -13,6 +13,7 @@ import org.opencell.core.link.LinkTarget
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.QrParse
+import org.opencell.core.protocol.RegFailReason
 import org.opencell.core.protocol.RegMode
 import org.opencell.core.protocol.SigState
 import org.opencell.core.session.ConsoleKind
@@ -297,5 +298,17 @@ class CallFlowTest {
         assertEquals(CallPhase.ENDED, b.state.call?.phase)
         assertEquals(EndCause.NORMAL, b.state.call?.cause)
         assertEquals(1L, b.state.call?.id) // the RELEASE (and ENDED) carry CALL_PROC's call id
+    }
+
+    @Test
+    fun registrationFailureIsReportedAndTheTerminalRetries() = runTest {
+        val b = bench(activated = true)
+        b.sim.failNextRegistration = RegFailReason.TIMEOUT
+        connect(b)
+        assertEquals(SigState.REGISTERING, b.state.sig)
+        assertEquals(RegFailReason.TIMEOUT, b.state.regFailure)
+        advanceTimeBy(31_000) // the terminal's retry
+        assertEquals(SigState.REGISTERED, b.state.sig)
+        assertNull(b.state.regFailure)
     }
 }

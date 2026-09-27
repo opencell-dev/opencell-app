@@ -16,6 +16,7 @@ import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.GattContract
 import org.opencell.core.protocol.QrParse
+import org.opencell.core.protocol.RegFailReason
 import org.opencell.core.protocol.RegMode
 import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalEvent
@@ -42,6 +43,8 @@ data class SimTiming(
     /** HANGUP or REJECT to ENDED. */
     val release: Duration = 300.milliseconds,
     val ringTimeout: Duration = 60.seconds,
+    /** REG_FAILED to the next registration attempt (the firmware's first backoff). */
+    val regRetry: Duration = 30.seconds,
 )
 
 /**
@@ -106,6 +109,10 @@ class SimulatedTerminal(
     /** Makes the next activation fail with this reason (the network's ACT_NAK), then clears itself. */
     @Volatile
     var failNextActivation: ActFailReason? = null
+
+    /** Makes the next registration fail with this reason (REG_FAILED), then clears itself; it retries after [SimTiming.regRetry]. */
+    @Volatile
+    var failNextRegistration: RegFailReason? = null
 
     /** The signalling state (STATUS byte 3), for tests. */
     val sigState: SigState get() = synchronized(lock) { sig }
@@ -196,8 +203,14 @@ class SimulatedTerminal(
         sig = SigState.REGISTERING
         if (radio == TerminalState.GRANTED) {
             later(timing.registration) {
-                sig = SigState.REGISTERED
-                emit(TerminalEvent.Registered(number!!, mode.code))
+                val fail = failNextRegistration?.also { failNextRegistration = null }
+                if (fail != null) {
+                    emit(TerminalEvent.RegistrationFailed(fail.code)) // still REGISTERING
+                    later(timing.regRetry) { startRegistration() }
+                } else {
+                    sig = SigState.REGISTERED
+                    emit(TerminalEvent.Registered(number!!, mode.code))
+                }
             }
         }
     }

@@ -1,16 +1,24 @@
 package org.opencell.app
 
+import android.Manifest
+import android.app.NotificationManager
+import android.content.pm.PackageManager
+import android.provider.Settings
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
+import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.protocol.RegFailReason
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -82,5 +90,65 @@ class PhoneFlowTest {
         compose.onNodeWithText("Deactivate this terminal?").assertExists()
         compose.onNodeWithText("Deactivate").performClick()
         compose.waitForText("Activate your terminal")
+    }
+
+    /** Triage: the Phone menu and the deactivate confirmation survive recreation (fold/unfold). */
+    @Test
+    fun menuAndDeactivateConfirmationSurviveRecreation() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.activityRule.scenario.recreate()
+        compose.waitForText("Deactivate terminal")
+        compose.onNodeWithText("Deactivate terminal").performClick()
+        compose.onNodeWithText("Deactivate this terminal?").assertExists()
+        compose.activityRule.scenario.recreate()
+        compose.waitForText("Deactivate this terminal?")
+    }
+
+    /** M8: a registration failure right after activation shows on the "Activated" screen, with Continue. */
+    @Test
+    fun registrationFailureAfterActivationIsShownWithContinue() {
+        compose.connectDemoAndOpenPhone()
+        compose.activity.graph.simulator.failNextRegistration = RegFailReason.TIMEOUT
+        compose.onNodeWithText("Use a demo code").performClick()
+        compose.waitForText("Valid until")
+        compose.onNodeWithText("Activate").performClick()
+        compose.waitForText("Registration failed: No answer from the network")
+        compose.onNodeWithText("Activated").assertExists()
+        compose.onNodeWithText("Continue").performClick()
+        compose.waitForText("Your number")
+    }
+
+    /** Triage: POST_NOTIFICATIONS granted but notifications off: "Allow" goes straight to the app's notification settings. */
+    @Test
+    fun notificationsAllowOpensSettingsWhenThePermissionIsAlreadyGranted() {
+        shadowOf(compose.activity.application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        shadowOf(compose.activity.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(false)
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.activityRule.scenario.moveToState(Lifecycle.State.STARTED)
+        compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED) // re-checks the environment
+        compose.waitForText("Notifications are off")
+        compose.onNodeWithText("Allow").performClick()
+        val started = shadowOf(compose.activity).nextStartedActivity
+        assertEquals(Settings.ACTION_APP_NOTIFICATION_SETTINGS, started?.action)
+    }
+
+    /** Triage: camera permanently denied: explain, and link to the app's settings instead of asking again. */
+    @Test
+    fun cameraPermanentlyDeniedExplainsAndLinksToSettings() {
+        compose.connectDemoAndOpenPhone()
+        compose.onNodeWithText("Scan QR code").performClick()
+        val request = shadowOf(compose.activity).lastRequestedPermission
+        assertEquals(Manifest.permission.CAMERA, request.requestedPermissions.single())
+        compose.runOnUiThread {
+            @Suppress("DEPRECATION")
+            compose.activity.onRequestPermissionsResult(request.requestCode, request.requestedPermissions, intArrayOf(PackageManager.PERMISSION_DENIED))
+        }
+        compose.waitForText("Camera access is off")
+        compose.onNodeWithText("Open Settings").performClick()
+        val started = shadowOf(compose.activity).nextStartedActivity
+        assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, started?.action)
     }
 }
