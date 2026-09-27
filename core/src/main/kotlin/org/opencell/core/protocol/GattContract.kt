@@ -65,6 +65,16 @@ object GattContract {
     /** ATT 0x81 (`LC_SIG_ATT_BAD_ARG`): a malformed COMMAND argument (QR text, number, confirmation byte). */
     const val ATT_ERR_BAD_ARG = 0x81
 
+    /**
+     * ATT 0x05, insufficient authentication: every characteristic (and every
+     * CCCD) needs a link encrypted with a passkey-authenticated key. An
+     * unpaired phone gets it; Android then pairs.
+     */
+    const val ATT_ERR_INSUFFICIENT_AUTHENTICATION = 0x05
+
+    /** ATT 0x0F, insufficient encryption. */
+    const val ATT_ERR_INSUFFICIENT_ENCRYPTION = 0x0F
+
     /** The terminal's device name prefix; the rest is the TMID in hex. */
     const val NAME_PREFIX = "OpenCell-"
 

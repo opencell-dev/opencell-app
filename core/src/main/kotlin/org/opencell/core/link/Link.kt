@@ -65,6 +65,19 @@ sealed interface LinkState {
     /** Connecting (including service discovery and enabling notifications). [attempt] counts from 1. */
     data class Connecting(override val target: LinkTarget, val attempt: Int) : LinkState
 
+    /** Connected and pairing: the system dialog asks for the code on the terminal's screen. */
+    data class Pairing(override val target: LinkTarget) : LinkState
+
+    /**
+     * Pairing failed or the phone's bond is stale. No automatic retry (each
+     * attempt costs one of the terminal's 3 tries a minute): connect again to retry.
+     */
+    data class PairingFailed(
+        override val target: LinkTarget,
+        val problem: PairingProblem,
+        val reason: String,
+    ) : LinkState
+
     data class Connected(override val target: LinkTarget, val mtu: Int) : LinkState
 
     /**
@@ -134,6 +147,9 @@ interface ConnectionEvents {
     fun onStatus(raw: ByteArray)
     fun onEvent(raw: ByteArray)
 
+    /** The transport started pairing; the user is being asked for the terminal's code. */
+    fun onPairing() {}
+
     /** The link dropped. Called at most once, and never after [Connection.close]. */
     fun onClosed(reason: String)
 }
@@ -151,13 +167,14 @@ interface Connection {
 
 /**
  * Opens [Connection]s. Implemented by the Android GATT transport and by the simulator.
- * Pairing/bonding, when it comes, belongs inside the GATT implementation of [connect]:
- * nothing above this interface needs to change.
+ * Pairing/bonding happens inside the GATT implementation of [connect]; it reports
+ * [ConnectionEvents.onPairing] and throws [PairingException] when the user must act.
  */
 fun interface Connector {
     /**
      * Connects and returns once the link is ready for writes.
-     * Throws on failure (including timeouts); the caller decides whether to retry.
+     * Throws on failure (including timeouts); the caller decides whether to retry,
+     * except after a [PairingException], which [LinkManager] never retries by itself.
      */
     suspend fun connect(target: LinkTarget, events: ConnectionEvents): Connection
 }

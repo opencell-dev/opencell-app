@@ -144,6 +144,8 @@ class LinkService : LifecycleService() {
         val text = when (state) {
             LinkState.Disconnected -> "Starting…"
             is LinkState.Connecting -> "Connecting…"
+            is LinkState.Pairing -> "Pairing: enter the code shown on the terminal"
+            is LinkState.PairingFailed -> "Pairing failed: open the app to retry"
             is LinkState.Connected -> {
                 val call = phone?.activeCall
                 val sig = phone?.sig

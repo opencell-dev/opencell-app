@@ -82,6 +82,36 @@ class LinkManagerTest {
         assertEquals(1.seconds, (m.state.value as LinkState.WaitingToReconnect).delay)
     }
 
+    @Test
+    fun pairingShowsWhileTheUserEntersTheCode() = runTest {
+        val connector = FakeConnector().apply { pairTime = 20.seconds }
+        val m = manager(connector)
+        m.connect(target)
+        advanceTimeBy(101)
+        assertEquals(LinkState.Pairing(target), m.state.value)
+        advanceTimeBy(20_000)
+        assertEquals(LinkState.Connected(target, 247), m.state.value)
+    }
+
+    @Test
+    fun aPairingFailureStopsTheReconnectsUntilTheUserRetries() = runTest {
+        val connector = FakeConnector().apply { pairingProblem = PairingProblem.STALE_BOND }
+        val m = manager(connector)
+        m.connect(target)
+        advanceTimeBy(101)
+        val failed = m.state.value as LinkState.PairingFailed
+        assertEquals(PairingProblem.STALE_BOND, failed.problem)
+        assertEquals("pairing failed or was cancelled", failed.reason)
+        advanceTimeBy(120_000)
+        assertEquals(1, connector.attempts) // no automatic retry: each one costs a try on the terminal
+        assertTrue(m.state.value is LinkState.PairingFailed)
+
+        m.connect(target) // the user's Retry
+        advanceTimeBy(101)
+        assertEquals(LinkState.Connected(target, 247), m.state.value)
+        assertEquals(2, connector.attempts)
+    }
+
     /** Bluetooth back on: the wait is cut short and the backoff starts over. */
     @Test
     fun retryNowCutsTheWaitShortAndRestartsTheBackoff() = runTest {
@@ -116,6 +146,24 @@ class LinkManagerTest {
         advanceTimeBy(900)
         assertEquals(1.seconds, (m.state.value as LinkState.WaitingToReconnect).delay)
         assertEquals(1, connector.attempts)
+    }
+
+    /** Bluetooth back on after a pairing failure must not spend one of the terminal's tries. */
+    @Test
+    fun retryNowDoesNotRestartAfterAPairingFailure() = runTest {
+        val connector = FakeConnector().apply { pairingProblem = PairingProblem.FAILED }
+        val m = manager(connector)
+        m.connect(target)
+        advanceTimeBy(101)
+        m.retryNow()
+        advanceTimeBy(10_000)
+        assertTrue(m.state.value is LinkState.PairingFailed)
+        assertEquals(1, connector.attempts)
+
+        m.connect(target) // the user's Retry
+        advanceTimeBy(101)
+        assertTrue(m.state.value.isConnected)
+        assertEquals(2, connector.attempts)
     }
 
     @Test

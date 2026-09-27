@@ -26,8 +26,9 @@ import kotlin.time.TimeSource
 /**
  * Keeps one terminal connected: connects through a [Connector], forwards
  * DOWN/STATUS, and reconnects with [reconnect] backoff whenever the link drops
- * or a connect fails, until [disconnect] is called. [retryNow] cuts a wait
- * short when the transport comes back (Bluetooth turned on again).
+ * or a connect fails, until [disconnect] is called — or until pairing needs
+ * the user ([LinkState.PairingFailed]; [connect] again to retry). [retryNow]
+ * cuts a wait short when the transport comes back (Bluetooth turned on again).
  *
  * Pure Kotlin, so the reconnect logic is unit-tested with a fake [Connector].
  */
@@ -85,7 +86,8 @@ class LinkManager(
      * The transport can connect again (Bluetooth came back on): ends the
      * current reconnect wait now, or the next one if an attempt is under
      * way, and starts the backoff over. One that comes while connected is
-     * dropped when that connection ends. No effect after [disconnect].
+     * dropped when that connection ends. No effect after [disconnect] or a
+     * pairing failure ([LinkState.PairingFailed] waits for [connect]).
      */
     fun retryNow() {
         wake.trySend(Unit)
@@ -153,6 +155,10 @@ class LinkManager(
                     _inputs.tryEmit(LinkInput.Event(e))
                 }
 
+                override fun onPairing() {
+                    _state.value = LinkState.Pairing(target)
+                }
+
                 override fun onClosed(reason: String) {
                     closed.complete(reason)
                 }
@@ -172,6 +178,9 @@ class LinkManager(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: PairingException) {
+                _state.value = LinkState.PairingFailed(target, e.problem, e.message ?: "pairing failed")
+                return
             } catch (e: Exception) {
                 e.message ?: e.javaClass.simpleName
             }

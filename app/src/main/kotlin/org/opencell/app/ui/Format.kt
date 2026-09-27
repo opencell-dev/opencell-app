@@ -1,6 +1,7 @@
 package org.opencell.app.ui
 
 import org.opencell.core.link.LinkState
+import org.opencell.core.link.PairingProblem
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -22,6 +23,11 @@ fun Duration?.ms(): String = this?.let { "${it.inWholeMilliseconds} ms" } ?: "�
 fun LinkState.summary(): String = when (this) {
     LinkState.Disconnected -> "Disconnected"
     is LinkState.Connecting -> if (attempt > 1) "Connecting (attempt $attempt)…" else "Connecting…"
+    is LinkState.Pairing -> "Pairing: enter the terminal's code"
+    is LinkState.PairingFailed -> when (problem) {
+        PairingProblem.FAILED -> "Pairing failed"
+        PairingProblem.STALE_BOND -> "Pairing out of date"
+    }
     is LinkState.Connected -> "Connected"
     is LinkState.WaitingToReconnect -> "Link lost, retry in ${delay.inWholeSeconds.coerceAtLeast(1)} s"
 }

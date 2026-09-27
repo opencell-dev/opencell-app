@@ -135,6 +135,8 @@ class TerminalSession(
     private fun describe(s: LinkState): String = when (s) {
         LinkState.Disconnected -> "Disconnected"
         is LinkState.Connecting -> "Connecting to ${s.target.label()}" + if (s.attempt > 1) " (attempt ${s.attempt})" else ""
+        is LinkState.Pairing -> "Pairing with ${s.target.label()}: enter the code shown on the terminal"
+        is LinkState.PairingFailed -> "Pairing with ${s.target.label()} failed: ${s.reason}"
         is LinkState.Connected -> "Connected to ${s.target.label()}, MTU ${s.mtu}"
         is LinkState.WaitingToReconnect -> "Link lost (${s.reason}); retrying in ${s.delay}"
     }

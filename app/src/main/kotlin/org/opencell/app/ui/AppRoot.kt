@@ -138,8 +138,8 @@ fun LinkStrip(vm: MainViewModel, onClick: () -> Unit) {
 fun LinkDot(state: LinkState) {
     val color = when (state) {
         is LinkState.Connected -> Color(0xFF2E7D32)
-        is LinkState.Connecting -> Color(0xFFF9A825)
-        is LinkState.WaitingToReconnect -> MaterialTheme.colorScheme.error
+        is LinkState.Connecting, is LinkState.Pairing -> Color(0xFFF9A825)
+        is LinkState.WaitingToReconnect, is LinkState.PairingFailed -> MaterialTheme.colorScheme.error
         LinkState.Disconnected -> MaterialTheme.colorScheme.outline
     }
     Box(Modifier.size(10.dp).background(color, CircleShape))
