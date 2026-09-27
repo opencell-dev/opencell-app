@@ -12,6 +12,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.opencell.core.fakes.FakeConnector
+import org.opencell.core.protocol.Command
+import org.opencell.core.protocol.Hex
+import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalState
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.Duration.Companion.seconds
@@ -123,6 +126,47 @@ class LinkManagerTest {
         assertEquals(status, m.status.value)
         assertEquals("HELLO", received.single().payload.decodeToString())
         assertEquals(testScheduler.currentTime, received.single().wallMillis)
+    }
+
+    @Test
+    fun forwardsDecodedEvents() = runTest {
+        val connector = FakeConnector()
+        val m = manager(connector)
+        val events = mutableListOf<TerminalEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { m.events.collect { events += it } }
+        m.connect(target)
+        advanceTimeBy(101)
+        val c = connector.connections.single()
+        c.events.onEvent(byteArrayOf(0x06, 0, 0, 0, 7))
+        c.events.onEvent(byteArrayOf(0x7F))
+        runCurrent()
+        assertEquals(listOf(TerminalEvent.Ringing(7), TerminalEvent.Unknown("7f")), events)
+    }
+
+    @Test
+    fun commandsGoToTheConnectionAndReportAttErrors() = runTest {
+        val connector = FakeConnector()
+        val m = manager(connector)
+        assertEquals(WriteResult.NotConnected, m.writeCommand(Command.Answer.encode()))
+        m.connect(target)
+        advanceTimeBy(101)
+        val c = connector.connections.single()
+        c.commandResults += listOf(WriteResult.NotNow, WriteResult.BadArgument)
+        assertEquals(WriteResult.NotNow, m.writeCommand(Command.Answer.encode()))
+        assertEquals(WriteResult.BadArgument, m.writeCommand(Command.Dial("+883").encode()))
+        assertEquals(WriteResult.Accepted, m.writeCommand(Command.Deactivate.encode()))
+        assertEquals(listOf("03", "02 2b 38 38 33", "06 a5"), c.commands.map { Hex.format(it) })
+        assertTrue("commands never go to UP", c.writes.isEmpty())
+    }
+
+    @Test
+    fun attErrorCodesMapToResults() {
+        assertEquals(WriteResult.Accepted, WriteResult.fromGattStatus(0))
+        assertEquals(WriteResult.NotNow, WriteResult.fromGattStatus(0x80))
+        assertEquals(WriteResult.TooLong, WriteResult.fromGattStatus(0x0D))
+        assertEquals(WriteResult.BadArgument, WriteResult.fromGattStatus(0x81))
+        assertTrue(WriteResult.fromGattStatus(133) is WriteResult.Failed)
+        assertEquals(RetryDecision.GiveUp, RetryPolicy().decide(1, WriteResult.BadArgument))
     }
 
     private fun CoroutineScope.launchCollect(m: LinkManager, into: MutableList<Downlink>) =

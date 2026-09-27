@@ -18,6 +18,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.TimeSource
 
@@ -52,6 +53,9 @@ class LinkManager(
     )
     override val downlink: SharedFlow<Downlink> = _downlink.asSharedFlow()
 
+    private val _events = MutableSharedFlow<TerminalEvent>(extraBufferCapacity = 64)
+    override val events: SharedFlow<TerminalEvent> = _events.asSharedFlow()
+
     private val control = Mutex()
     private var job: Job? = null
 
@@ -74,10 +78,14 @@ class LinkManager(
         _state.value = LinkState.Disconnected
     }
 
-    override suspend fun writeUp(payload: ByteArray): WriteResult {
+    override suspend fun writeUp(payload: ByteArray): WriteResult = withConnection { it.write(payload) }
+
+    override suspend fun writeCommand(payload: ByteArray): WriteResult = withConnection { it.writeCommand(payload) }
+
+    private suspend fun withConnection(write: suspend (Connection) -> WriteResult): WriteResult {
         val c = connection ?: return WriteResult.NotConnected
         return try {
-            c.write(payload)
+            write(c)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -114,6 +122,10 @@ class LinkManager(
 
                 override fun onStatus(raw: ByteArray) {
                     TerminalStatus.decodeOrNull(raw)?.let(::publishStatus)
+                }
+
+                override fun onEvent(raw: ByteArray) {
+                    _events.tryEmit(TerminalEvent.decode(raw))
                 }
 
                 override fun onClosed(reason: String) {

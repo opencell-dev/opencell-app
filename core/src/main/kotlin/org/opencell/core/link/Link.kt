@@ -3,17 +3,19 @@ package org.opencell.core.link
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.opencell.core.protocol.GattContract
+import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 
 /**
  * The seam between the transport (BLE GATT today) and everything above it:
- * the console, the loopback test and, later, call control and the voice codec.
+ * the console, the loopback test, the phone (activation, registration, calls)
+ * and, later, the voice codec.
  *
- * It carries opaque payloads of at most [org.opencell.core.protocol.GattContract.MAX_PAYLOAD]
- * bytes, one per radio frame each way, and nothing else. Upper layers must not
- * know about GATT.
+ * It carries app data frames of at most [org.opencell.core.protocol.GattContract.MAX_PAYLOAD]
+ * bytes (one per radio frame each way), COMMAND writes and EVENT notifications.
+ * Upper layers must not know about GATT.
  */
 interface TerminalLink {
     val state: StateFlow<LinkState>
@@ -24,8 +26,14 @@ interface TerminalLink {
     /** Every DOWN payload, timestamped on arrival. Hot; late subscribers miss earlier payloads. */
     val downlink: SharedFlow<Downlink>
 
+    /** Every EVENT notification, decoded. Hot; the terminal doesn't queue events while no phone is connected. */
+    val events: SharedFlow<TerminalEvent>
+
     /** One write attempt to UP. No retries here: see [UplinkSender]. */
     suspend fun writeUp(payload: ByteArray): WriteResult
+
+    /** One COMMAND write (with response). Never retried: see [org.opencell.core.protocol.Command]. */
+    suspend fun writeCommand(payload: ByteArray): WriteResult
 
     /** Reads STATUS now. Returns null when not connected or the read failed. */
     suspend fun refreshStatus(): TerminalStatus?
@@ -65,14 +73,17 @@ class Downlink(val payload: ByteArray, val at: ComparableTimeMark, val wallMilli
 
 /** Outcome of one write attempt to UP. */
 sealed interface WriteResult {
-    /** The terminal queued the payload for its next UL slot (or a RACH). */
+    /** UP: the terminal queued the frame for its next UL slot. COMMAND: the terminal took the command. */
     data object Accepted : WriteResult
 
-    /** ATT 0x80: no grant yet, UL queue full, a RACH already pending... Retry later. */
+    /** ATT 0x80. UP: no grant, or the UL queue is full; retry later. COMMAND: not in the right state. */
     data object NotNow : WriteResult
 
-    /** ATT 0x0D: longer than the terminal's limit. Permanent. */
+    /** ATT 0x0D: UP longer than the terminal's limit, or a COMMAND of the wrong length. Permanent. */
     data object TooLong : WriteResult
+
+    /** ATT 0x81: a malformed COMMAND argument (QR text, number, confirmation byte). Permanent. */
+    data object BadArgument : WriteResult
 
     data object NotConnected : WriteResult
 
@@ -85,6 +96,7 @@ sealed interface WriteResult {
             0 -> Accepted
             GattContract.ATT_ERR_NOT_NOW -> NotNow
             GattContract.ATT_ERR_INVALID_LENGTH -> TooLong
+            GattContract.ATT_ERR_BAD_ARG -> BadArgument
             else -> Failed(status, "GATT status 0x%02X".format(status))
         }
     }
@@ -94,6 +106,7 @@ sealed interface WriteResult {
             Accepted -> "accepted"
             NotNow -> "not now (0x80)"
             TooLong -> "too long (0x0D)"
+            BadArgument -> "bad argument (0x81)"
             NotConnected -> "not connected"
             is Failed -> "failed: $message"
         }
@@ -106,6 +119,7 @@ sealed interface WriteResult {
 interface ConnectionEvents {
     fun onDownlink(payload: ByteArray)
     fun onStatus(raw: ByteArray)
+    fun onEvent(raw: ByteArray)
 
     /** The link dropped. Called at most once, and never after [Connection.close]. */
     fun onClosed(reason: String)
@@ -115,13 +129,18 @@ interface ConnectionEvents {
 interface Connection {
     val mtu: Int
     suspend fun write(payload: ByteArray): WriteResult
+    suspend fun writeCommand(payload: ByteArray): WriteResult
     suspend fun readStatus(): ByteArray?
 
     /** Tears the connection down. Idempotent; no [ConnectionEvents.onClosed] follows. */
     fun close()
 }
 
-/** Opens [Connection]s. Implemented by the Android GATT transport and by the simulator. */
+/**
+ * Opens [Connection]s. Implemented by the Android GATT transport and by the simulator.
+ * Pairing/bonding, when it comes, belongs inside the GATT implementation of [connect]:
+ * nothing above this interface needs to change.
+ */
 fun interface Connector {
     /**
      * Connects and returns once the link is ready for writes.

@@ -34,11 +34,21 @@ class FakeConnection(val events: ConnectionEvents, private val statusBytes: Byte
     var closed = false
         private set
     val writes = mutableListOf<ByteArray>()
+    val commands = mutableListOf<ByteArray>()
+
+    /** Results for the next COMMAND writes (Accepted when empty). */
+    val commandResults = ArrayDeque<WriteResult>()
 
     override suspend fun write(payload: ByteArray): WriteResult {
         if (closed) return WriteResult.NotConnected
         writes += payload
         return WriteResult.Accepted
+    }
+
+    override suspend fun writeCommand(payload: ByteArray): WriteResult {
+        if (closed) return WriteResult.NotConnected
+        commands += payload
+        return commandResults.removeFirstOrNull() ?: WriteResult.Accepted
     }
 
     override suspend fun readStatus(): ByteArray? = statusBytes

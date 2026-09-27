@@ -117,6 +117,12 @@ class SimulatedTerminal(
             }
         }
 
+        /** The v1 simulator has no signalling yet (Task 7 adds it): every command is refused as "not now". */
+        override suspend fun writeCommand(payload: ByteArray): WriteResult {
+            delay(bleDelay)
+            return if (isClosed()) WriteResult.NotConnected else WriteResult.NotNow
+        }
+
         override suspend fun readStatus(): ByteArray? {
             delay(bleDelay)
             return synchronized(lock) { if (closed) null else status().encode() }

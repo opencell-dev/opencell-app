@@ -31,7 +31,11 @@ import kotlin.time.Duration.Companion.seconds
 
 private const val TAG = "OpenCellGatt"
 
-/** Opens [GattConnection]s to terminals by MAC address. */
+/**
+ * Opens [GattConnection]s to terminals by MAC address. This is the one place
+ * the app connects over GATT: BLE pairing/bonding, if the terminal starts to
+ * require it, goes here and in [GattConnection.open].
+ */
 class GattConnector(private val context: Context) : Connector {
     override suspend fun connect(target: LinkTarget, events: ConnectionEvents): Connection {
         val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
@@ -92,6 +96,7 @@ internal class GattConnection(
     private var gatt: BluetoothGatt? = null
     private lateinit var up: BluetoothGattCharacteristic
     private lateinit var status: BluetoothGattCharacteristic
+    private lateinit var command: BluetoothGattCharacteristic
 
     @Volatile
     override var mtu: Int = 23
@@ -148,7 +153,7 @@ internal class GattConnection(
         }
     }
 
-    /** Connects, requests a larger MTU, discovers services and enables DOWN and STATUS notifications. */
+    /** Connects, requests a larger MTU, discovers services and enables DOWN, STATUS and EVENT notifications. */
     suspend fun open() {
         // Deprecated in API 37 in favour of connectGatt(BluetoothGattConnectionSettings, ...),
         // which the Fold 7 (API 36) doesn't have.
@@ -158,7 +163,8 @@ internal class GattConnection(
         withTimeoutOrNull(CONNECT_TIMEOUT) { connected.await() }
             ?: throw GattException("connect timed out")
 
-        // Not needed for 20-byte payloads (the default MTU of 23 fits them), but harmless.
+        // Lets ACTIVATE (up to 121 bytes) go in one write; with the default MTU of 23
+        // Android falls back to a long (prepared) write, which the terminal also takes.
         // Optional: if it can't start or never answers, carry on with 23.
         val m = try {
             op(Kind.MTU, MTU_TIMEOUT, timeoutDropsLink = false) { it.requestMtu(REQUESTED_MTU) }
@@ -175,8 +181,12 @@ internal class GattConnection(
         up = service.getCharacteristic(GattContract.UP) ?: throw GattException("UP characteristic missing")
         status = service.getCharacteristic(GattContract.STATUS) ?: throw GattException("STATUS characteristic missing")
         val down = service.getCharacteristic(GattContract.DOWN) ?: throw GattException("DOWN characteristic missing")
+        command = service.getCharacteristic(GattContract.COMMAND)
+            ?: throw GattException("COMMAND characteristic missing (terminal firmware older than contract v2)")
+        val event = service.getCharacteristic(GattContract.EVENT) ?: throw GattException("EVENT characteristic missing")
         enableNotifications(down)
         enableNotifications(status)
+        enableNotifications(event)
 
         ready.set(true)
         if (closed.get()) throw GattException("link dropped during setup")
@@ -188,18 +198,23 @@ internal class GattConnection(
      * error back (0x80 not now, 0x0D too long). A write command
      * (without response) would be dropped silently on those errors.
      */
-    override suspend fun write(payload: ByteArray): WriteResult {
+    override suspend fun write(payload: ByteArray): WriteResult = writeWithResponse(up, payload)
+
+    /** COMMAND is write-with-response only; ATT 0x80, 0x0D and 0x81 come back as [WriteResult]s. */
+    override suspend fun writeCommand(payload: ByteArray): WriteResult = writeWithResponse(command, payload)
+
+    private suspend fun writeWithResponse(c: BluetoothGattCharacteristic, payload: ByteArray): WriteResult {
         var startCode = 0
         val r = op(Kind.WRITE) { g ->
             startCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeCharacteristic(up, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                g.writeCharacteristic(c, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
             } else {
                 @Suppress("DEPRECATION")
-                up.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                 @Suppress("DEPRECATION")
-                up.value = payload
+                c.value = payload
                 @Suppress("DEPRECATION")
-                if (g.writeCharacteristic(up)) BluetoothStatusCodes.SUCCESS else LEGACY_START_FAILED
+                if (g.writeCharacteristic(c)) BluetoothStatusCodes.SUCCESS else LEGACY_START_FAILED
             }
             startCode == BluetoothStatusCodes.SUCCESS
         }.takeIf { startCode == BluetoothStatusCodes.SUCCESS }
@@ -286,6 +301,7 @@ internal class GattConnection(
         when (uuid) {
             GattContract.DOWN -> events.onDownlink(value.copyOf())
             GattContract.STATUS -> events.onStatus(value.copyOf())
+            GattContract.EVENT -> events.onEvent(value.copyOf())
         }
     }
 
@@ -324,6 +340,7 @@ internal class GattConnection(
             0x3E -> "0x3E failed to establish"
             GattContract.ATT_ERR_INVALID_LENGTH -> "0x0D invalid length"
             GattContract.ATT_ERR_NOT_NOW -> "0x80 not now"
+            GattContract.ATT_ERR_BAD_ARG -> "0x81 bad argument"
             133 -> "133 GATT_ERROR"
             else -> "0x%02X".format(status)
         }
