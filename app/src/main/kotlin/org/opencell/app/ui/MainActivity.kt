@@ -5,10 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import org.opencell.app.ui.theme.OpenCellTheme
 
 class MainActivity : ComponentActivity() {
-    private val viewModel: MainViewModel by viewModels()
+    // An explicit factory with this activity's Application: the default one can hand an
+    // AndroidViewModel the first Application it saw (Robolectric makes one per test).
+    private val viewModel: MainViewModel by viewModels { viewModelFactory { initializer { MainViewModel(application) } } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()

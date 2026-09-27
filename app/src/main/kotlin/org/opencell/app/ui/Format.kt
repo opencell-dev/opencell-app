@@ -8,8 +8,14 @@ import kotlin.time.Duration
 
 private val CLOCK = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 
+private val DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
 fun clockTime(millis: Long): String =
     CLOCK.format(Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()))
+
+/** A unix time in seconds as local date and time, e.g. an activation code's expiry. */
+fun dateTime(unixSeconds: Long): String =
+    DATE_TIME.format(Instant.ofEpochSecond(unixSeconds).atZone(ZoneId.systemDefault()))
 
 fun Duration?.ms(): String = this?.let { "${it.inWholeMilliseconds} ms" } ?: "–"
 

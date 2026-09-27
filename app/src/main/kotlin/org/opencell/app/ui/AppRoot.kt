@@ -14,8 +14,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -38,7 +39,8 @@ import androidx.window.core.layout.WindowSizeClass
 import org.opencell.core.link.LinkState
 
 enum class Destination(val label: String, val icon: ImageVector) {
-    TERMINAL("Terminal", Icons.Filled.Home),
+    PHONE("Phone", Icons.Filled.Phone),
+    TERMINAL("Terminal", Icons.Filled.Settings),
     CONSOLE("Console", Icons.AutoMirrored.Filled.Send),
     LOOPBACK("Loopback", Icons.Filled.Refresh),
 }
@@ -47,10 +49,12 @@ enum class Destination(val label: String, val icon: ImageVector) {
  * Top level. The navigation suite is a bottom bar on the Fold's cover screen
  * and a rail on the inner screen. Folding or unfolding only changes the
  * window size; the selected destination is saved and the link is untouched.
+ * Phone is the subscriber's screen; Terminal, Console and Loopback are the
+ * bring-up and diagnostics tools of v1.
  */
 @Composable
 fun AppRoot(vm: MainViewModel) {
-    var destination by rememberSaveable { mutableStateOf(Destination.TERMINAL) }
+    var destination by rememberSaveable { mutableStateOf(Destination.PHONE) }
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             Destination.entries.forEach { d ->
@@ -64,6 +68,7 @@ fun AppRoot(vm: MainViewModel) {
         },
     ) {
         when (destination) {
+            Destination.PHONE -> PhoneScreen(vm, onOpenTerminal = { destination = Destination.TERMINAL })
             Destination.TERMINAL -> TerminalListDetail(vm)
             Destination.CONSOLE -> WithStatusPanel(vm, onOpenTerminal = { destination = Destination.TERMINAL }) {
                 ConsoleScreen(vm)

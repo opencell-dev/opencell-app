@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.opencell.app.ble.BleScanner
 import org.opencell.app.ble.GattConnector
+import org.opencell.app.data.PrefsPhoneMemory
 import org.opencell.app.data.TerminalRepository
 import org.opencell.core.link.Connector
 import org.opencell.core.session.TerminalSession
@@ -23,12 +24,13 @@ class AppGraph(context: Context) {
         if (target.address == SimulatedTerminal.ADDRESS) simulator.connect(target, events) else gatt.connect(target, events)
     }
 
-    val session = TerminalSession(connector, scope)
+    private val prefs = context.getSharedPreferences("opencell", Context.MODE_PRIVATE)
+    val session = TerminalSession(connector, scope, phoneMemory = PrefsPhoneMemory(prefs))
     val repository = TerminalRepository(
         context = context,
         session = session,
         scanner = BleScanner(context),
-        prefs = context.getSharedPreferences("opencell", Context.MODE_PRIVATE),
+        prefs = prefs,
         scope = scope,
     )
 }

@@ -12,10 +12,12 @@ import org.opencell.app.ble.ScannedDevice
 import org.opencell.app.graph
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.loopback.LoopbackConfig
+import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.GattContract
 import org.opencell.core.protocol.Hex
 import org.opencell.core.protocol.PayloadCheck
 import org.opencell.core.protocol.PayloadRules
+import org.opencell.core.protocol.QrParse
 import org.opencell.core.sim.SimulatedTerminal
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -140,6 +142,72 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopLoopback() = session.stopLoopback()
+
+    // --- phone ---
+
+    /** The phone side of the terminal; the call screen talks to it directly (it is shared with CallActivity). */
+    val phoneSession = session.phone
+    val phone = phoneSession.state
+
+    /** True while connected (or connecting) to the demo terminal, which offers demo activation codes. */
+    val isDemo: Boolean get() = (linkState.value.target ?: wanted.value)?.address == SimulatedTerminal.ADDRESS
+
+    /** The activation code text field. */
+    var codeInput by mutableStateOf("")
+
+    /** A valid code waiting for the user to confirm its number and expiry. */
+    var pendingCode by mutableStateOf<ActivationQr?>(null)
+        private set
+    var codeError by mutableStateOf<String?>(null)
+        private set
+
+    /** The user chose "Activate with a new code" on an activated terminal. */
+    var reactivating by mutableStateOf(false)
+
+    var dialInput by mutableStateOf("")
+    var dialError by mutableStateOf<String?>(null)
+        private set
+
+    /** A scanned or pasted code, checked like the terminal checks it. Valid codes wait for [confirmActivation]. */
+    fun onCode(text: String) {
+        when (val p = ActivationQr.parse(text)) {
+            is QrParse.Ok -> {
+                pendingCode = p.qr
+                codeError = null
+            }
+            is QrParse.Invalid -> {
+                pendingCode = null
+                codeError = p.reason
+            }
+        }
+    }
+
+    fun useDemoCode() = onCode(getApplication<Application>().graph.simulator.demoQrText())
+
+    fun confirmActivation() {
+        val code = pendingCode ?: return
+        phoneSession.activate(code)
+        pendingCode = null
+        codeInput = ""
+    }
+
+    fun cancelCode() {
+        pendingCode = null
+        codeError = null
+    }
+
+    /** Leaves the activation result screen. */
+    fun finishActivation() {
+        phoneSession.clearActivation()
+        reactivating = false
+    }
+
+    fun dial(number: String = dialInput) {
+        dialError = phoneSession.dial(number)
+    }
+
+    fun deactivate() = phoneSession.deactivate()
+    fun clearNotice() = phoneSession.clearNotice()
 
     companion object {
         const val MAX = GattContract.MAX_PAYLOAD

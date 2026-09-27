@@ -45,7 +45,12 @@ class AppSmokeTest {
         }
     }
 
+    private fun openTerminalTab() {
+        compose.onNodeWithText("Terminal").performClick()
+    }
+
     private fun openDemoTerminal() {
+        openTerminalTab()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Demo terminal"))
         compose.onNodeWithText("Demo terminal").performClick()
     }
@@ -67,6 +72,7 @@ class AppSmokeTest {
     @Config(qualifiers = "w884dp-h824dp")
     fun innerScreenShowsListAndStatusTogether() {
         compose.onNodeWithText("OpenCell").assertExists()
+        openTerminalTab()
         compose.onNodeWithText("Status").assertExists()
         openDemoTerminal()
         waitForText("Granted")
