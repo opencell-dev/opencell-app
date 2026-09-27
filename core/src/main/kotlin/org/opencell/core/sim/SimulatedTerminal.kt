@@ -10,22 +10,56 @@ import org.opencell.core.link.ConnectionEvents
 import org.opencell.core.link.Connector
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.link.WriteResult
+import org.opencell.core.protocol.ActFailReason
+import org.opencell.core.protocol.ActivationQr
+import org.opencell.core.protocol.Command
+import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.GattContract
+import org.opencell.core.protocol.QrParse
+import org.opencell.core.protocol.RegMode
+import org.opencell.core.protocol.SigState
+import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalState
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.random.Random
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+
+/** How long the simulated terminal and network take for each step. */
+data class SimTiming(
+    val activation: Duration = 1500.milliseconds,
+    val registration: Duration = 800.milliseconds,
+    /** DIAL to RINGING (CALL_SETUP, CALL_PROC, ALERTING). */
+    val setup: Duration = 400.milliseconds,
+    /** The simulated peer answers after ringing this long, like `lcbench net`'s peer (3 s). */
+    val peerAnswers: Duration = 3.seconds,
+    /** ANSWER to CONNECTED. */
+    val answer: Duration = 300.milliseconds,
+    /** HANGUP or REJECT to ENDED. */
+    val release: Duration = 300.milliseconds,
+    val ringTimeout: Duration = 60.seconds,
+)
 
 /**
- * A software terminal plus echoing test cell, for trying the app without
- * hardware ("Demo terminal") and for tests. It behaves like the firmware as
- * far as the phone can tell:
- * - walks SEARCH -> SYNCED -> ATTACHING -> GRANTED over ~2 s of frames;
- * - takes UP writes into a 4-deep queue (0x80 when full or not granted,
- *   0x0D when over 20 bytes) and sends one per 120 ms frame;
- * - echoes each sent payload back on DOWN after [echoDelay];
- * - notifies STATUS on state changes and every second with a jittered RSSI.
+ * A software terminal plus network, for trying the app without hardware
+ * ("Demo terminal") and for tests. As far as the phone can tell it behaves like
+ * the firmware (contract v2) against `lcbench net`:
+ * - the radio walks SEARCH -> SYNCED -> ATTACHING -> GRANTED over ~2 s of frames
+ *   and then stays granted;
+ * - UP takes app data frames into a 4-deep queue (0x80 when full or not granted,
+ *   0x0D over 18 bytes), sends one per 120 ms frame, and the cell or the call's
+ *   peer echoes each on DOWN after [echoDelay];
+ * - COMMANDs are checked like `lc_sig_term_command` (0x0D length, 0x81 argument,
+ *   0x80 state), and EVENTs and STATUS byte 3 follow like the firmware's;
+ * - activation accepts any valid code whose token wasn't used here and hasn't
+ *   expired; outgoing calls ring and are answered after [SimTiming.peerAnswers];
+ *   dialling your own number is busy, [UNREACHABLE] is unreachable;
+ * - EVENTs are dropped while no phone is connected, like the firmware's.
+ *
+ * Signalling state lives here, not in the connection, so a test can drop the
+ * BLE link ([dropLink]) and reconnect to a terminal that carried on without it.
  */
 class SimulatedTerminal(
     private val scope: CoroutineScope,
@@ -33,22 +67,260 @@ class SimulatedTerminal(
     private val echoDelay: Duration = 300.milliseconds,
     private val connectDelay: Duration = 400.milliseconds,
     private val bleDelay: Duration = 15.milliseconds,
-    private val seed: Int = 1,
+    seed: Int = 1,
+    /** Start activated with this number (registers once attached); null starts not activated. */
+    activatedNumber: String? = null,
+    private val timing: SimTiming = SimTiming(),
+    private val mode: RegMode = RegMode.PART15,
+    private val unixSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
 ) : Connector {
     val name: String get() = GattContract.NAME_PREFIX + "%08X".format(tmid)
 
+    private val lock = Any()
+    private val random = Random(seed)
+    private var frames = 0
+    private var radio = TerminalState.SEARCH
+    private var rssi = -52
+    private var current: Sim? = null
+
+    private var activated = activatedNumber != null
+    private var number: String? = activatedNumber
+    private var sig = if (activatedNumber != null) SigState.REGISTERING else SigState.NOT_ACTIVATED
+    private val usedTokens = mutableSetOf<String>()
+    private var callId = 0L
+    private var nextCallId = 1L
+    private var answered = false
+    private var pending: Job? = null
+
+    /** Makes the next activation fail with this reason (the network's ACT_NAK), then clears itself. */
+    @Volatile
+    var failNextActivation: ActFailReason? = null
+
+    /** The signalling state (STATUS byte 3), for tests. */
+    val sigState: SigState get() = synchronized(lock) { sig }
+
     override suspend fun connect(target: LinkTarget, events: ConnectionEvents): Connection {
         delay(connectDelay)
-        return Sim(events).also { it.start() }
+        val sim = Sim(events)
+        synchronized(lock) { current = sim }
+        sim.start()
+        return sim
+    }
+
+    /** A fresh one-time code for the demo, like `lcbench mkqr --number`. Each call makes a new token. */
+    fun demoQrText(number: String = DEMO_NUMBER, validFor: Duration = 24.hours): String = synchronized(lock) {
+        ActivationQr.format(
+            keyId = 1,
+            networkKey = ByteArray(32) { random.nextInt().toByte() },
+            tokenId = ByteArray(8) { random.nextInt().toByte() },
+            tokenSecret = ByteArray(16) { random.nextInt().toByte() },
+            number = number,
+            expiryUnix = unixSeconds() + validFor.inWholeSeconds,
+        )
+    }
+
+    /** Someone calls this terminal (the stand-in's `--call-in`). False unless it is registered and idle. */
+    fun incomingCall(caller: String = PEER): Boolean = synchronized(lock) {
+        if (sig != SigState.REGISTERED) return false
+        callId = nextCallId++
+        answered = false
+        sig = SigState.RINGING_IN
+        emit(TerminalEvent.Incoming(callId, caller))
+        later(timing.ringTimeout) { end(EndCause.NO_ANSWER) }
+        true
+    }
+
+    /** The far end hangs up (the stand-in's `--peer-hangup`). False if there is no call. */
+    fun peerHangup(): Boolean = synchronized(lock) {
+        if (!sig.hasCall) return false
+        end(EndCause.NORMAL)
+        true
+    }
+
+    /** The BLE link drops (supervision timeout); the terminal carries on without the phone. */
+    fun dropLink() {
+        val sim = synchronized(lock) { current.also { current = null } } ?: return
+        sim.drop("simulated link loss")
+    }
+
+    // --- signalling, all called with the lock held ---
+
+    /** Runs [step] after [d], replacing any step still pending (a call has one timer at a time, like the firmware). */
+    private fun later(d: Duration, step: () -> Unit) {
+        pending?.cancel()
+        pending = scope.launch {
+            delay(d)
+            val me = coroutineContext[Job]
+            synchronized(lock) {
+                if (pending !== me) return@launch // replaced or cancelled after the delay ended
+                pending = null
+                step()
+            }
+        }
+    }
+
+    private fun emit(e: TerminalEvent) {
+        val sim = current ?: return // not queued while no phone is connected
+        sim.deliverEvent(e.encode())
+        sim.deliverStatus(status())
+    }
+
+    private fun statusChanged() {
+        current?.deliverStatus(status())
+    }
+
+    private fun startRegistration() {
+        sig = SigState.REGISTERING
+        statusChanged()
+        if (radio == TerminalState.GRANTED) {
+            later(timing.registration) {
+                sig = SigState.REGISTERED
+                emit(TerminalEvent.Registered(number!!, mode.code))
+            }
+        }
+    }
+
+    private fun finishActivation(qr: ActivationQr) {
+        val fail = failNextActivation?.also { failNextActivation = null } ?: when {
+            qr.tokenId in usedTokens -> ActFailReason.TOKEN_USED
+            qr.isExpired(unixSeconds()) -> ActFailReason.TOKEN_EXPIRED
+            else -> null
+        }
+        if (fail != null) {
+            if (activated) sig = SigState.REGISTERING else sig = SigState.NOT_ACTIVATED
+            emit(TerminalEvent.ActivationFailed(fail.code))
+            if (activated) startRegistration()
+            return
+        }
+        usedTokens += qr.tokenId
+        activated = true
+        number = qr.number
+        sig = SigState.REGISTERING
+        emit(TerminalEvent.Activated(qr.number))
+        startRegistration()
+    }
+
+    private fun startOutgoing(called: String) {
+        sig = SigState.CALLING
+        callId = 0
+        statusChanged()
+        later(timing.setup) {
+            callId = nextCallId++
+            when (called) {
+                number -> end(EndCause.BUSY)
+                UNREACHABLE -> end(EndCause.UNREACHABLE)
+                else -> {
+                    sig = SigState.RINGING_OUT
+                    emit(TerminalEvent.Ringing(callId))
+                    later(timing.peerAnswers) { connectCall() }
+                }
+            }
+        }
+    }
+
+    private fun connectCall() {
+        sig = SigState.IN_CALL
+        emit(TerminalEvent.Connected(callId, 1))
+    }
+
+    private fun end(cause: EndCause) {
+        pending?.cancel()
+        pending = null
+        val id = callId
+        sig = SigState.REGISTERED
+        callId = 0
+        answered = false
+        emit(TerminalEvent.Ended(id, cause.code))
+    }
+
+    private fun command(p: ByteArray): WriteResult = synchronized(lock) {
+        if (p.isEmpty()) return WriteResult.TooLong
+        val a = p.copyOfRange(1, p.size)
+        when (p[0].toInt() and 0xFF) {
+            Command.ACTIVATE -> {
+                // As term_ble.c: length and code first (lc_sig_term_act_prepare), then state.
+                if (a.isEmpty() || a.size > GattContract.QR_TEXT_MAX) return WriteResult.TooLong
+                val qr = (ActivationQr.parse(a.decodeToString()) as? QrParse.Ok)?.qr ?: return WriteResult.BadArgument
+                if (sig == SigState.ACTIVATING || sig.hasCall) return WriteResult.NotNow
+                sig = SigState.ACTIVATING
+                statusChanged()
+                later(timing.activation) { finishActivation(qr) }
+            }
+            Command.DIAL -> {
+                if (a.isEmpty() || a.size > 16) return WriteResult.TooLong
+                if (sig != SigState.REGISTERED) return WriteResult.NotNow
+                val text = a.decodeToString()
+                if (!STRICT_NUMBER.matches(text)) return WriteResult.BadArgument
+                startOutgoing(if (text.startsWith("+")) text else "+$text")
+            }
+            Command.ANSWER -> {
+                if (a.isNotEmpty()) return WriteResult.TooLong
+                if (sig != SigState.RINGING_IN || answered) return WriteResult.NotNow
+                answered = true
+                later(timing.answer) { connectCall() }
+            }
+            Command.REJECT, Command.HANGUP -> {
+                if (a.isNotEmpty()) return WriteResult.TooLong
+                val ringingIn = sig == SigState.RINGING_IN
+                val ok = if (p[0].toInt() == Command.REJECT) {
+                    ringingIn
+                } else {
+                    ringingIn || sig == SigState.CALLING || sig == SigState.RINGING_OUT || sig == SigState.IN_CALL
+                }
+                if (!ok) return WriteResult.NotNow
+                val cause = if (ringingIn) EndCause.REJECTED else EndCause.NORMAL
+                sig = SigState.RELEASING
+                statusChanged()
+                later(timing.release) { end(cause) }
+            }
+            Command.DEACTIVATE -> {
+                if (a.size != 1) return WriteResult.TooLong
+                if (a[0] != GattContract.DEACTIVATE_CONFIRM.toByte()) return WriteResult.BadArgument
+                if (sig.hasCall) return WriteResult.NotNow // the firmware refuses it during a call
+                pending?.cancel()
+                pending = null
+                activated = false
+                number = null
+                sig = SigState.NOT_ACTIVATED
+                emit(TerminalEvent.Deactivated)
+            }
+            else -> return WriteResult.BadArgument
+        }
+        WriteResult.Accepted
+    }
+
+    private fun status() = TerminalStatus(
+        stateCode = radio.code,
+        bandCode = 0,
+        tierCode = 2,
+        rssiDbm = rssi,
+        snrQuarterDb = 50,
+        tmid = tmid,
+        frame = 1000L + frames,
+        cellSeed = 0x5EED1234L,
+        sigCode = sig.code,
+    )
+
+    /** One radio frame: the attach walk, a jittered RSSI every 8 frames, one queued UP frame sent. */
+    private fun tick(sim: Sim): ByteArray? = synchronized(lock) {
+        frames++
+        val next = when {
+            radio == TerminalState.GRANTED -> TerminalState.GRANTED
+            frames < 5 -> TerminalState.SEARCH
+            frames < 9 -> TerminalState.SYNCED
+            frames < 13 -> TerminalState.ATTACHING
+            else -> TerminalState.GRANTED
+        }
+        val changed = next != radio
+        radio = next
+        if (frames % 8 == 0) rssi = -52 + random.nextInt(-3, 4)
+        if (changed && radio == TerminalState.GRANTED && sig == SigState.REGISTERING && pending == null) startRegistration()
+        if (changed || frames % 8 == 0) sim.deliverStatus(status())
+        if (radio == TerminalState.GRANTED) sim.queue.removeFirstOrNull() else null
     }
 
     private inner class Sim(private val events: ConnectionEvents) : Connection {
-        private val lock = Any()
-        private val random = Random(seed)
-        private val queue = ArrayDeque<ByteArray>()
-        private var frame = 1000L
-        private var state = TerminalState.SEARCH
-        private var rssi = -52
+        val queue = ArrayDeque<ByteArray>()
         private var closed = false
         private var job: Job? = null
 
@@ -56,27 +328,9 @@ class SimulatedTerminal(
 
         fun start() {
             job = scope.launch {
-                var n = 0
                 while (isActive) {
                     delay(GattContract.FRAME_MILLIS)
-                    n++
-                    val (status, up) = synchronized(lock) {
-                        frame++
-                        val next = when {
-                            n < 5 -> TerminalState.SEARCH
-                            n < 9 -> TerminalState.SYNCED
-                            n < 13 -> TerminalState.ATTACHING
-                            else -> TerminalState.GRANTED
-                        }
-                        val changed = next != state
-                        state = next
-                        if (n % 8 == 0) rssi = -52 + random.nextInt(-3, 4)
-                        val st = if (changed || n % 8 == 0) status() else null
-                        val sent = if (state == TerminalState.GRANTED) queue.removeFirstOrNull() else null
-                        st to sent
-                    }
-                    status?.let { if (!isClosed()) events.onStatus(it.encode()) }
-                    up?.let { echo(it) }
+                    tick(this@Sim)?.let { echo(it) }
                 }
             }
         }
@@ -84,22 +338,24 @@ class SimulatedTerminal(
         private fun echo(payload: ByteArray) {
             scope.launch {
                 delay(echoDelay)
-                if (!isClosed()) events.onDownlink(payload)
+                val open = synchronized(lock) { !closed }
+                if (open) events.onDownlink(payload)
             }
         }
 
-        private fun isClosed() = synchronized(lock) { closed }
+        fun deliverEvent(raw: ByteArray) {
+            if (!closed) events.onEvent(raw)
+        }
 
-        private fun status() = TerminalStatus(
-            stateCode = state.code,
-            bandCode = 0,
-            tierCode = 2,
-            rssiDbm = rssi,
-            snrQuarterDb = 50,
-            tmid = tmid,
-            frame = frame,
-            cellSeed = 0x5EED1234L,
-        )
+        fun deliverStatus(st: TerminalStatus) {
+            if (!closed) events.onStatus(st.encode())
+        }
+
+        fun drop(reason: String) {
+            synchronized(lock) { closed = true }
+            job?.cancel()
+            events.onClosed(reason)
+        }
 
         override suspend fun write(payload: ByteArray): WriteResult {
             delay(bleDelay)
@@ -107,7 +363,7 @@ class SimulatedTerminal(
                 return when {
                     closed -> WriteResult.NotConnected
                     payload.size > GattContract.MAX_PAYLOAD -> WriteResult.TooLong
-                    state != TerminalState.GRANTED -> WriteResult.NotNow
+                    radio != TerminalState.GRANTED -> WriteResult.NotNow
                     queue.size >= 4 -> WriteResult.NotNow
                     else -> {
                         queue.addLast(payload.copyOf())
@@ -117,10 +373,11 @@ class SimulatedTerminal(
             }
         }
 
-        /** The v1 simulator has no signalling yet (Task 7 adds it): every command is refused as "not now". */
         override suspend fun writeCommand(payload: ByteArray): WriteResult {
             delay(bleDelay)
-            return if (isClosed()) WriteResult.NotConnected else WriteResult.NotNow
+            if (synchronized(lock) { closed }) return WriteResult.NotConnected
+            if (payload.size > GattContract.COMMAND_MAX) return WriteResult.TooLong
+            return command(payload)
         }
 
         override suspend fun readStatus(): ByteArray? {
@@ -129,7 +386,10 @@ class SimulatedTerminal(
         }
 
         override fun close() {
-            synchronized(lock) { closed = true }
+            synchronized(lock) {
+                closed = true
+                if (current === this) current = null
+            }
             job?.cancel()
         }
     }
@@ -137,5 +397,16 @@ class SimulatedTerminal(
     companion object {
         /** The address the app uses for the simulated terminal. */
         const val ADDRESS = "SIMULATED"
+
+        /** The number the demo code activates. */
+        const val DEMO_NUMBER = "+8836065551234"
+
+        /** A peer that answers, like `lcbench net`'s simulated peer. */
+        const val PEER = "+8836065550100"
+
+        /** Calls to this number end "unreachable". */
+        const val UNREACHABLE = "+8836065559999"
+
+        private val STRICT_NUMBER = Regex("\\+?883[0-9]{10}")
     }
 }
