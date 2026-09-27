@@ -2,12 +2,14 @@ package org.opencell.app.ui
 
 import android.Manifest
 import android.app.Application
+import android.app.NotificationManager
 import android.bluetooth.BluetoothManager
 import android.os.Build
 import android.os.PowerManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.AndroidViewModel
 import org.opencell.app.ble.BlePermissions
 import org.opencell.app.ble.ScannedDevice
@@ -73,10 +75,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             batteryUnrestricted = ctx.getSystemService(PowerManager::class.java)
                 .isIgnoringBatteryOptimizations(ctx.packageName),
             cameraPermission = BlePermissions.has(ctx, Manifest.permission.CAMERA),
-            notificationsAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                BlePermissions.has(ctx, Manifest.permission.POST_NOTIFICATIONS),
+            notificationsAllowed = notificationsAllowed(ctx),
             fullScreenCalls = CallNotifier(ctx).canUseFullScreenIntent(),
         )
+    }
+
+    /**
+     * POST_NOTIFICATIONS on 13+ (without it the system refuses to post anything),
+     * notifications enabled overall, and the calls channel itself not silenced by
+     * the user (it may not exist yet, before the first incoming call: that's fine).
+     */
+    private fun notificationsAllowed(ctx: Application): Boolean {
+        val runtimeOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            BlePermissions.has(ctx, Manifest.permission.POST_NOTIFICATIONS)
+        val channel = ctx.getSystemService(NotificationManager::class.java).getNotificationChannel(CallNotifier.CHANNEL_ID)
+        val channelOk = channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
+        return runtimeOk && NotificationManagerCompat.from(ctx).areNotificationsEnabled() && channelOk
     }
 
     // --- terminal ---

@@ -11,22 +11,18 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleService
-import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.opencell.app.R
 import org.opencell.app.graph
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.link.LinkState
-import org.opencell.core.phone.CallPhase
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.TerminalStatus
@@ -36,13 +32,14 @@ import org.opencell.core.protocol.TerminalStatus
  * and so the BLE link, while the screen is off or the app is in the
  * background. The link itself lives in the app-scoped repository; this
  * service holds the process in the foreground, shows the ongoing
- * notification, and posts the incoming-call notification ([CallNotifier])
- * while a call rings and no app screen is visible. It stops itself when the
- * user disconnects.
+ * notification, and is the sole ring source for an incoming call
+ * ([CallRinger], [CallNotifier], per [ringPlan]) regardless of which screen
+ * is visible. It stops itself when the user disconnects.
  */
 class LinkService : LifecycleService() {
     private var watching = false
     private val callNotifier by lazy { CallNotifier(this) }
+    private val callRinger by lazy { CallRinger(this) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -99,16 +96,20 @@ class LinkService : LifecycleService() {
                 }
         }
         lifecycleScope.launch {
-            // Ring in the background only: with an app screen visible, the in-app call screen shows it.
-            val visible = ProcessLifecycleOwner.get().lifecycle.currentStateFlow.map { it.isAtLeast(Lifecycle.State.STARTED) }
-            val ringing = phone.state.map { it.call?.takeIf { c -> c.phase == CallPhase.INCOMING } }
-            combine(ringing, visible) { call, fg -> if (fg) null else call }
+            // The service is the only ring source, so this runs regardless of which screen is
+            // visible: CallActivity (what the notification opens) makes no sound of its own.
+            combine(phone.state, graph.mainActivityInFront) { p, front -> Triple(p.call, p.linkUp, front) }
                 .distinctUntilChanged()
-                .collect { call -> if (call != null) callNotifier.showIncoming(call) else callNotifier.cancel() }
+                .collect { (call, linkUp, front) ->
+                    val plan = ringPlan(call?.phase, call?.answering == true, linkUp, front)
+                    if (plan.ring) callRinger.start() else callRinger.stop()
+                    if (plan.notify && call != null) callNotifier.showIncoming(call) else callNotifier.cancel()
+                }
         }
     }
 
     private fun stop() {
+        callRinger.stop()
         callNotifier.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()

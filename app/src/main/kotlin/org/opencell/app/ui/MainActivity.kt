@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import org.opencell.app.graph
 import org.opencell.app.ui.theme.OpenCellTheme
 
 class MainActivity : ComponentActivity() {
@@ -27,5 +28,15 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshEnvironment()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        graph.mainActivityInFront.value = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        graph.mainActivityInFront.value = false
     }
 }

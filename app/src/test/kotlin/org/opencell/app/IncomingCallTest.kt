@@ -3,12 +3,14 @@ package org.opencell.app
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,7 +59,7 @@ class IncomingCallTest {
     }
 
     @Test
-    fun notificationRingsFullScreenAndCancels() {
+    fun notificationIsSilentFullScreenAndCancels() {
         val notifier = CallNotifier(app)
         notifier.showIncoming(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
         val posted = shadowOf(nm).allNotifications.single()
@@ -65,17 +67,48 @@ class IncomingCallTest {
         assertNotNull(posted.fullScreenIntent)
         // CallStyle titles the notification with the caller.
         assertEquals("+883 606 555 0100", posted.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
-        assertTrue("rings until handled", posted.flags and Notification.FLAG_INSISTENT != 0)
         assertEquals(CallNotifier.CHANNEL_ID, posted.channelId)
-        assertEquals(NotificationManager.IMPORTANCE_HIGH, nm.getNotificationChannel(CallNotifier.CHANNEL_ID).importance)
+        val channel = nm.getNotificationChannel(CallNotifier.CHANNEL_ID)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, channel.importance)
+        // CallRinger is the only sound/vibration source now: the notification's own channel carries none.
+        assertNull(channel.sound)
+        assertEquals(90_000L, posted.timeoutAfter)
         notifier.cancel()
         assertTrue(shadowOf(nm).allNotifications.isEmpty())
     }
 
     @Test
+    fun ensureChannelReplacesTheOldSoundedChannel() {
+        nm.createNotificationChannel(
+            android.app.NotificationChannel("calls", "Old calls channel", NotificationManager.IMPORTANCE_HIGH).apply {
+                setSound(android.net.Uri.parse("content://old-ringtone"), null)
+            },
+        )
+        CallNotifier(app).ensureChannel()
+        assertNull("the immutable, sounded channel is removed rather than reused", nm.getNotificationChannel("calls"))
+        assertNotNull(nm.getNotificationChannel(CallNotifier.CHANNEL_ID))
+    }
+
+    @Test
     fun callerUnknownAfterAResyncStillRings() {
-        val n = CallNotifier(app).build(Call(null, Direction.INCOMING, null, CallPhase.INCOMING))
-        assertEquals("Unknown caller", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        val notifier = CallNotifier(app)
+        notifier.showIncoming(Call(null, Direction.INCOMING, null, CallPhase.INCOMING))
+        val posted = shadowOf(nm).allNotifications.single()
+        assertEquals("Unknown caller", posted.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertNotNull(posted.fullScreenIntent)
+        notifier.cancel()
+    }
+
+    @Test
+    fun answerAndRejectActionsTargetTheRightComponentsAndActions() {
+        val n = CallNotifier(app).build(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        val rejectAction = n.actions.first { shadowOf(it.actionIntent).savedIntent.action == CallActionReceiver.ACTION_REJECT }
+        val rejectIntent = shadowOf(rejectAction.actionIntent).savedIntent
+        assertEquals(CallActionReceiver::class.java.name, rejectIntent.component?.className)
+
+        val answerAction = n.actions.first { shadowOf(it.actionIntent).savedIntent.action == CallActivity.ACTION_ANSWER }
+        val answerIntent = shadowOf(answerAction.actionIntent).savedIntent
+        assertEquals(CallActivity::class.java.name, answerIntent.component?.className)
     }
 
     @Test
@@ -89,9 +122,27 @@ class IncomingCallTest {
     }
 
     @Test
+    fun callActivityFinishesWhenThereIsNoCallToShow() {
+        // No call at all when it launches: its very first (synchronous) read of the phone's
+        // state already has call == null, so it finishes without needing to observe a live
+        // state change (see CallEndActionTest for the ENDED-then-delay half of this decision).
+        val scenario = ActivityScenario.launch<CallActivity>(Intent(app, CallActivity::class.java))
+        assertEquals(Lifecycle.State.DESTROYED, scenario.state)
+    }
+
+    @Test
     fun rejectFromTheNotificationRejects() {
         ringingDemoCall()
         CallActionReceiver().onReceive(app, Intent(CallActionReceiver.ACTION_REJECT))
         waitFor("rejected") { phone.state.value.call?.cause == EndCause.REJECTED }
+    }
+
+    @Test
+    fun rejectReceiverDoesNotCancelTheNotificationItself() {
+        val notifier = CallNotifier(app)
+        notifier.showIncoming(Call(1, Direction.INCOMING, "+8836065550100", CallPhase.INCOMING))
+        CallActionReceiver().onReceive(app, Intent(CallActionReceiver.ACTION_REJECT))
+        assertEquals(1, shadowOf(nm).allNotifications.size)
+        notifier.cancel()
     }
 }

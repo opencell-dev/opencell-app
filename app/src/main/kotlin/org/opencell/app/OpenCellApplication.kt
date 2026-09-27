@@ -5,6 +5,7 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.opencell.app.ble.BleScanner
 import org.opencell.app.ble.GattConnector
 import org.opencell.app.data.PrefsPhoneMemory
@@ -33,6 +34,15 @@ class AppGraph(context: Context) {
         prefs = prefs,
         scope = scope,
     )
+
+    /**
+     * Whether [org.opencell.app.ui.MainActivity] is started. [org.opencell.app.service.LinkService]
+     * uses this — not `ProcessLifecycleOwner` — to decide whether to keep the
+     * incoming-call notification posted, so [org.opencell.app.ui.CallActivity]
+     * (which the notification's full-screen intent or Answer action opens)
+     * being on screen doesn't itself count as "the app is in front" and hide it.
+     */
+    val mainActivityInFront = MutableStateFlow(false)
 }
 
 class OpenCellApplication : Application() {

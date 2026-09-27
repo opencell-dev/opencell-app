@@ -6,8 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -17,26 +15,28 @@ import org.opencell.core.phone.Call
 import org.opencell.core.protocol.PhoneNumber
 
 /**
- * The incoming-call notification, posted while the app is in the background:
- * CallStyle with Answer and Reject, a ringtone on a high-importance channel,
- * and a full-screen intent that opens [CallActivity] over the lock screen.
+ * The incoming-call notification, posted while [LinkService]'s [ringPlan]
+ * says to: CallStyle with Answer and Reject, and a full-screen intent that
+ * opens [CallActivity] over the lock screen. It carries no sound or
+ * vibration of its own — [CallRinger] is the only ring source, driven by
+ * [LinkService] regardless of which screen is visible — so its channel has
+ * no sound and the notification itself is silent
+ * ([NotificationCompat.Builder.setSilent]). It also times out on its own
+ * after [TIMEOUT_MS], belt and braces in case a state change is ever missed.
  */
 class CallNotifier(private val context: Context) {
     private val nm = context.getSystemService(NotificationManager::class.java)
 
     fun ensureChannel() {
+        // Channels are immutable once created: the old "calls" channel had a ringtone sound
+        // (now CallRinger's job), so this is a new channel id, and the old one is removed.
+        nm.deleteNotificationChannel(LEGACY_CHANNEL_ID)
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, context.getString(R.string.channel_calls), NotificationManager.IMPORTANCE_HIGH).apply {
                 description = context.getString(R.string.channel_calls_description)
-                setSound(
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build(),
-                )
-                enableVibration(true)
+                setSound(null, null)
+                enableVibration(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             },
         )
@@ -69,11 +69,13 @@ class CallNotifier(private val context: Context) {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
+            .setSilent(true) // CallRinger is the only sound/vibration source
+            .setOnlyAlertOnce(true)
+            .setTimeoutAfter(TIMEOUT_MS)
             .setContentIntent(fullScreen)
             .setFullScreenIntent(fullScreen, true)
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, reject, answer))
             .build()
-            .apply { flags = flags or Notification.FLAG_INSISTENT } // ring until answered, rejected or ended
     }
 
     fun showIncoming(call: Call) {
@@ -96,8 +98,10 @@ class CallNotifier(private val context: Context) {
         }
 
     companion object {
-        const val CHANNEL_ID = "calls"
+        const val CHANNEL_ID = "calls_silent"
+        private const val LEGACY_CHANNEL_ID = "calls"
         const val NOTIFICATION_ID = 2
+        private const val TIMEOUT_MS = 90_000L
         private const val REQUEST_SHOW = 10
         private const val REQUEST_ANSWER = 11
         private const val REQUEST_REJECT = 12

@@ -1,6 +1,10 @@
 package org.opencell.app.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
@@ -54,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.app.ui.theme.CallGreen
@@ -305,13 +310,33 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
 private fun CallReadiness(vm: MainViewModel) {
     val env = vm.environment
     val context = LocalContext.current
-    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.refreshEnvironment() }
+    var requestedNotifications by remember { mutableStateOf(false) }
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        requestedNotifications = true
+        vm.refreshEnvironment()
+    }
     if (!env.notificationsAllowed) {
         NoticeCard(
             title = "Notifications are off",
             text = "Without them the phone can't ring for incoming calls while the app is in the background.",
             action = "Allow",
-            onAction = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) },
+            onAction = {
+                val activity = context.findActivity()
+                // Below 13 there's no runtime permission to ask for; above it, a denial where the
+                // system says it won't show a rationale again means the user needs Settings instead.
+                val settingsOnly = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || (
+                    requestedNotifications && activity != null &&
+                        !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.POST_NOTIFICATIONS)
+                    )
+                if (settingsOnly) {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                    )
+                } else {
+                    notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
         )
     } else if (!env.fullScreenCalls && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
         NoticeCard(
@@ -319,12 +344,25 @@ private fun CallReadiness(vm: MainViewModel) {
             text = "Allow OpenCell to show incoming calls full screen. Otherwise they only show as a notification.",
             action = "Allow",
             onAction = {
-                context.startActivity(
-                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()),
-                )
+                try {
+                    context.startActivity(
+                        Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()),
+                    )
+                } catch (e: ActivityNotFoundException) {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()),
+                    )
+                }
             },
         )
     }
+}
+
+/** Walks the Context wrapper chain to find the hosting Activity: Compose's LocalContext may be wrapped. */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
