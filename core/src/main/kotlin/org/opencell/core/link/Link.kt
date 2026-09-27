@@ -65,7 +65,10 @@ sealed interface LinkState {
     /** Connecting (including service discovery and enabling notifications). [attempt] counts from 1. */
     data class Connecting(override val target: LinkTarget, val attempt: Int) : LinkState
 
-    /** Connected and pairing: the system dialog asks for the code on the terminal's screen. */
+    /**
+     * Connected and pairing: the system dialog asks for the code on the terminal's
+     * screen. Once the bond is done the state goes back to [Connecting] for the rest of setup.
+     */
     data class Pairing(override val target: LinkTarget) : LinkState
 
     /**
@@ -149,6 +152,9 @@ interface ConnectionEvents {
 
     /** The transport started pairing; the user is being asked for the terminal's code. */
     fun onPairing() {}
+
+    /** The bond is done; setup goes on (MTU, discovery, notifications) without the user. */
+    fun onBonded() {}
 
     /** The link dropped. Called at most once, and never after [Connection.close]. */
     fun onClosed(reason: String)

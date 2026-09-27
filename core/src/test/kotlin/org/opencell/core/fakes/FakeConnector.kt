@@ -14,11 +14,13 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * A [Connector] whose connects take [connectTime] and can be made to fail,
- * pair first ([pairTime] > 0: reports onPairing, then waits), or fail pairing.
+ * pair first ([pairTime] > 0: reports onPairing, then waits; once bonded, reports
+ * onBonded and takes [setupTime] more), or fail pairing.
  */
 class FakeConnector(private val connectTime: Duration = 100.milliseconds) : Connector {
     var failNext = 0
     var pairTime: Duration = Duration.ZERO
+    var setupTime: Duration = Duration.ZERO
     var pairingProblem: PairingProblem? = null
     var statusBytes: ByteArray? = null
     val connections = mutableListOf<FakeConnection>()
@@ -35,6 +37,10 @@ class FakeConnector(private val connectTime: Duration = 100.milliseconds) : Conn
         pairingProblem?.let {
             pairingProblem = null
             throw PairingException(it, "pairing failed or was cancelled")
+        }
+        if (pairTime > Duration.ZERO) {
+            events.onBonded()
+            delay(setupTime)
         }
         if (failNext > 0) {
             failNext--

@@ -148,7 +148,6 @@ internal class GattConnection(
 
     @Volatile
     private var bonder: Bonder? = null
-    private var bondedAtStart = false
 
     /** The status the link dropped with (0 if none or unknown), for ops that find it gone. */
     @Volatile
@@ -233,19 +232,34 @@ internal class GattConnection(
         withTimeoutOrNull(CONNECT_TIMEOUT) { connected.await() }
             ?: throw GattException("connect timed out")
 
-        bondedAtStart = device.bondState == BluetoothDevice.BOND_BONDED
-        if (!bondedAtStart) bond()
+        var bondedBefore = device.bondState == BluetoothDevice.BOND_BONDED
+        if (!bondedBefore) bond()
         try {
-            setUp()
+            try {
+                setUp()
+            } catch (e: GattException) {
+                // Android (One UI) may start its own pairing when the terminal lacks the
+                // phone's key: an op then hangs, or the link drops, with the bond BONDING.
+                // That is pairing: wait for it like ours (a failure isn't retried by itself).
+                if (device.bondState != BluetoothDevice.BOND_BONDING) throw e
+                Log.i(TAG, "Android is pairing during setup (${e.message})")
+                bond()
+                bondedBefore = false
+                setUp()
+            }
         } catch (e: GattException) {
             // A refused CCCD write, or the link dropping while the phone re-encrypts
             // with a key the terminal no longer has, is about pairing, not the radio.
-            val problem = PairingRules.classify(e.status, bondedAtStart) ?: throw e
+            val problem = PairingRules.classify(e.status, bondedBefore) ?: throw e
             throw PairingException(problem, pairingMessage(problem, e.message))
         }
     }
 
-    /** Asks Android to bond (its dialog takes the code from the terminal's OLED) and waits. */
+    /**
+     * Asks Android to bond (its dialog takes the code from the terminal's OLED) and
+     * waits, or waits for the bond Android already started. Needs the link up: one
+     * that has dropped ends the wait at once (LINK_LOST).
+     */
     private suspend fun bond() {
         events.onPairing()
         val b = Bonder(context, device)
@@ -263,12 +277,13 @@ internal class GattConnection(
         val failure = when (result) {
             BondResult.BONDED -> null
             BondResult.NOT_STARTED -> "pairing could not start"
-            BondResult.FAILED -> bondFailureMessage(b.failReason)
+            BondResult.FAILED -> bondFailureMessage(b.failReason, dropStatus)
             BondResult.TIMED_OUT -> "pairing timed out"
-            BondResult.LINK_LOST -> "the terminal dropped the link while pairing (after 3 wrong codes it refuses for 60 s)"
+            BondResult.LINK_LOST -> pairingDropMessage(dropStatus)
         }
         if (failure != null) throw PairingException(PairingProblem.FAILED, failure)
         Log.i(TAG, "bonded: ${device.address}")
+        events.onBonded()
     }
 
     private fun bluetoothOn() = context.getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
@@ -400,7 +415,8 @@ internal class GattConnection(
     /**
      * Runs one GATT operation: [start] kicks it off (false = couldn't start),
      * the matching callback completes it. Serialized by [opLock]. By default
-     * a timeout means the link is dead and drops it.
+     * a timeout means the link is dead and drops it, unless Android is pairing
+     * ([open] then waits for that).
      */
     private suspend fun op(
         kind: Kind,
@@ -418,7 +434,9 @@ internal class GattConnection(
                     throw GattException("$kind could not start")
                 }
                 withTimeoutOrNull(timeout) { p.result.await() } ?: run {
-                    if (timeoutDropsLink) dropped("$kind timed out")
+                    // Not while Android pairs: the op waits on that, and dropping would end it.
+                    val bonding = device.bondState == BluetoothDevice.BOND_BONDING
+                    if (timeoutDropsLink && !bonding) dropped("$kind timed out")
                     throw GattException("$kind timed out")
                 }
             } finally {

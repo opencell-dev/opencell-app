@@ -9,6 +9,8 @@ import org.opencell.core.link.Connection
 import org.opencell.core.link.ConnectionEvents
 import org.opencell.core.link.Connector
 import org.opencell.core.link.LinkTarget
+import org.opencell.core.link.PairingException
+import org.opencell.core.link.PairingProblem
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.ActFailReason
 import org.opencell.core.protocol.ActivationQr
@@ -114,11 +116,19 @@ class SimulatedTerminal(
     @Volatile
     var failNextRegistration: RegFailReason? = null
 
+    /** Makes the next connect fail pairing with this problem (the phone's side of the BLE link), then clears itself. */
+    @Volatile
+    var failNextConnect: PairingProblem? = null
+
     /** The signalling state (STATUS byte 3), for tests. */
     val sigState: SigState get() = synchronized(lock) { sig }
 
     override suspend fun connect(target: LinkTarget, events: ConnectionEvents): Connection {
         delay(connectDelay)
+        failNextConnect?.let {
+            failNextConnect = null
+            throw PairingException(it, "pairing failed (simulated)")
+        }
         val sim = Sim(events)
         synchronized(lock) { current = sim }
         sim.start()

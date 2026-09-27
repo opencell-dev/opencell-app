@@ -93,6 +93,44 @@ class LinkManagerTest {
         assertEquals(LinkState.Connected(target, 247), m.state.value)
     }
 
+    /** Once bonded, the rest of the setup is ordinary connecting: the "enter the code" prompt goes away. */
+    @Test
+    fun afterTheBondTheLinkIsConnectingAgain() = runTest {
+        val connector = FakeConnector().apply { pairTime = 20.seconds; setupTime = 3.seconds }
+        val m = manager(connector)
+        m.connect(target)
+        advanceTimeBy(101)
+        assertEquals(LinkState.Pairing(target), m.state.value)
+        advanceTimeBy(20_000)
+        assertEquals(LinkState.Connecting(target, 1), m.state.value)
+        advanceTimeBy(3_000)
+        assertEquals(LinkState.Connected(target, 247), m.state.value)
+    }
+
+    /**
+     * After the process was killed during or after a failed pairing, the link is shown as
+     * needing the user's Retry without connecting: a connect would start a system pairing
+     * nobody is there to answer, and cost one of the terminal's 3 tries.
+     */
+    @Test
+    fun awaitingAPairingRetryDoesNotConnect() = runTest {
+        val connector = FakeConnector()
+        val m = manager(connector)
+        m.awaitPairingRetry(target, "the app was closed during pairing")
+        advanceTimeBy(120_000)
+        m.retryNow()
+        advanceTimeBy(120_000)
+        assertEquals(0, connector.attempts)
+        assertEquals(
+            LinkState.PairingFailed(target, PairingProblem.FAILED, "the app was closed during pairing"),
+            m.state.value,
+        )
+
+        m.connect(target) // the user's Retry
+        advanceTimeBy(101)
+        assertEquals(LinkState.Connected(target, 247), m.state.value)
+    }
+
     @Test
     fun aPairingFailureStopsTheReconnectsUntilTheUserRetries() = runTest {
         val connector = FakeConnector().apply { pairingProblem = PairingProblem.STALE_BOND }

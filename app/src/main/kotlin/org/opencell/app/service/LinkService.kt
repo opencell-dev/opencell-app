@@ -50,8 +50,9 @@ class LinkService : LifecycleService() {
         if (!goForeground()) return START_NOT_STICKY
 
         if (intent == null && repo.wanted.value == null) {
-            // Restarted by the system after the process was killed: resume the link.
-            repo.resumeTarget?.let { repo.connect(it) }
+            // Restarted by the system after the process was killed: resume the link
+            // (or, if it was pairing, wait for the user's Retry).
+            repo.resume()
         }
         if (repo.wanted.value == null) {
             stop()

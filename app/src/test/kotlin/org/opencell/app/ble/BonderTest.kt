@@ -136,8 +136,20 @@ class BonderTest {
         assertTrue(bondFailureMessage(3).contains("cancelled"))
         assertTrue(bondFailureMessage(6).contains("timed out"))
         assertTrue(bondFailureMessage(7).contains("try again in a minute"))
-        assertTrue(bondFailureMessage(4).contains("link was lost"))
+        assertTrue(bondFailureMessage(4).contains("move closer and tap Retry"))
+        assertTrue(bondFailureMessage(4, dropStatus = 0x05).contains("try again in a minute"))
         assertTrue(bondFailureMessage(null).contains("wrong code"))
+    }
+
+    /** Only the terminal's lock-out refusal (0x05, term_ble.c) is blamed on the 3 wrong codes. */
+    @Test
+    fun aDropDuringPairingIsReadByItsStatus() {
+        assertTrue(pairingDropMessage(0x05).contains("after 3 wrong codes"))
+        for (status in listOf(0, 0x08, 0x13, 0x3E)) {
+            val m = pairingDropMessage(status)
+            assertTrue(m, m.contains("move closer and tap Retry"))
+            assertFalse(m, m.contains("wrong codes"))
+        }
     }
 
     @Test

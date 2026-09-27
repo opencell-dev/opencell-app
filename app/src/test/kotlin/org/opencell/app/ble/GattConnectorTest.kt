@@ -16,6 +16,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
@@ -60,6 +61,7 @@ class GattConnectorTest {
     private val closedReasons = mutableListOf<String>()
     private var bluetoothOn = 0
     private var pairing = 0
+    private var bonded = 0
     private var gatt: BluetoothGatt? = null
 
     /** Bluetooth turns off inside connectGatt, before open() has the client in hand. */
@@ -71,6 +73,9 @@ class GattConnectorTest {
         override fun onEvent(raw: ByteArray) = Unit
         override fun onPairing() {
             pairing++
+        }
+        override fun onBonded() {
+            bonded++
         }
         override fun onClosed(reason: String) {
             closedReasons += reason
@@ -197,8 +202,10 @@ class GattConnectorTest {
         assertEquals(1, pairing)
         assertFalse("waits for the user to type the code", c.isCompleted)
         bondState(BluetoothDevice.BOND_BONDING)
+        assertEquals(0, bonded)
         bondState(BluetoothDevice.BOND_BONDED)
         assertEquals(WriteResult.Accepted, c.await().writeCommand(Command.Reject.encode()))
+        assertEquals("the code prompt ends once bonded, before the rest of setup", 1, bonded)
     }
 
     @Test
@@ -280,7 +287,77 @@ class GattConnectorTest {
         assertTrue("no virtual time passed", currentTime < 60_000)
         val e = c.await().exceptionOrNull()
         assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue("${e?.message}", e!!.message!!.contains("try again in a minute"))
         assertTrue(shadowOf(gatt).isClosed)
+    }
+
+    /** Only 0x05 is the terminal's lock-out refusal: other drops (here a supervision timeout) aren't blamed on it. */
+    @Test
+    fun anotherDropWhilePairingIsNotBlamedOnTheLockOut() = runTest {
+        unbonded()
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        shadowOf(gatt).gattCallback.onConnectionStateChange(gatt, 0x08, BluetoothProfile.STATE_DISCONNECTED)
+        runCurrent()
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue("${e?.message}", e!!.message!!.contains("move closer and tap Retry"))
+        assertFalse("${e.message}", e.message!!.contains("3 wrong codes"))
+    }
+
+    /**
+     * One UI may start its own pairing when the terminal lacks the phone's key: a
+     * setup op then hangs while the bond is BONDING. That is pairing, not a dead
+     * link: wait for it (the passkey dialog is up) instead of dropping the link.
+     */
+    @Test
+    @Config(shadows = [CccdGatt::class])
+    fun aSystemPairingDuringSetupIsWaitedForNotDropped() = runTest {
+        CccdGatt.hold = true
+        val c = async { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) }
+        runCurrent()
+        bondState(BluetoothDevice.BOND_BONDING)
+        advanceTimeBy(6_000) // past OP_TIMEOUT
+        runCurrent()
+        assertFalse("waits for the user to type the code", c.isCompleted)
+        assertFalse("the link is kept for the pairing", shadowOf(gatt).isClosed)
+        assertEquals(1, pairing)
+
+        CccdGatt.hold = false
+        bondState(BluetoothDevice.BOND_BONDED)
+        assertEquals(WriteResult.Accepted, c.await().writeCommand(Command.Reject.encode()))
+        assertEquals(1, bonded)
+    }
+
+    /** ... and a system pairing that fails is a pairing failure (no automatic retry), not a link loss. */
+    @Test
+    @Config(shadows = [CccdGatt::class])
+    fun aSystemPairingThatFailsDuringSetupIsAPairingFailure() = runTest {
+        CccdGatt.hold = true
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        bondState(BluetoothDevice.BOND_BONDING)
+        advanceTimeBy(6_000)
+        runCurrent()
+        bondState(BluetoothDevice.BOND_NONE)
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue(shadowOf(gatt).isClosed)
+    }
+
+    /** The link dropping while the system pairs is a pairing failure too, so LinkManager doesn't reconnect into another prompt. */
+    @Test
+    @Config(shadows = [CccdGatt::class])
+    fun aDropWhileTheSystemPairsIsAPairingFailure() = runTest {
+        CccdGatt.hold = true
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
+        runCurrent()
+        bondState(BluetoothDevice.BOND_BONDING)
+        shadowOf(gatt).gattCallback.onConnectionStateChange(gatt, 0x08, BluetoothProfile.STATE_DISCONNECTED)
+        runCurrent()
+        val e = c.await().exceptionOrNull()
+        assertTrue("$e", e is PairingException && e.problem == PairingProblem.FAILED)
+        assertTrue("${e?.message}", e!!.message!!.contains("move closer and tap Retry"))
     }
 
     /** Re-encrypting with a key the terminal no longer has: it disconnects with "key missing". */

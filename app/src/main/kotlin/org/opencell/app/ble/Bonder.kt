@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import org.opencell.core.link.PairingRules
 import kotlin.time.Duration
 
 /** How [Bonder.bond] ended. */
@@ -22,12 +23,26 @@ private const val UNBOND_REASON_REMOTE_DEVICE_DOWN = 4
 private const val UNBOND_REASON_AUTH_TIMEOUT = 6
 private const val UNBOND_REASON_REPEATED_ATTEMPTS = 7
 
-/** What to tell the user when a bond ended in NONE, given Android's [Bonder.failReason]. */
-internal fun bondFailureMessage(reason: Int?): String = when (reason) {
+/**
+ * What to tell the user when the link dropped during pairing, given the
+ * disconnect [status]. Only 0x05 is the terminal refusing while pairing is
+ * locked out (term_ble.c ends the link with BLE_ERR_AUTH_FAIL); anything else
+ * (supervision timeout 0x08, 0x3E, 0x13…) is the radio link.
+ */
+internal fun pairingDropMessage(status: Int): String = when (status) {
+    PairingRules.HCI_AUTH_FAILURE -> "the terminal refused pairing: after 3 wrong codes it refuses for 60 s, so try again in a minute"
+    else -> "the link dropped during pairing; move closer and tap Retry"
+}
+
+/**
+ * What to tell the user when a bond ended in NONE, given Android's [Bonder.failReason]
+ * and the status the link dropped with, if it did ([dropStatus], 0 if not or unknown).
+ */
+internal fun bondFailureMessage(reason: Int?, dropStatus: Int = 0): String = when (reason) {
     UNBOND_REASON_AUTH_CANCELED -> "pairing was cancelled"
     UNBOND_REASON_AUTH_TIMEOUT -> "pairing timed out"
     UNBOND_REASON_REPEATED_ATTEMPTS -> "the terminal is refusing pairing after 3 wrong codes: try again in a minute"
-    UNBOND_REASON_REMOTE_DEVICE_DOWN -> "the link was lost during pairing"
+    UNBOND_REASON_REMOTE_DEVICE_DOWN -> pairingDropMessage(dropStatus)
     else -> "pairing failed (a wrong code also changes the terminal's code)"
 }
 

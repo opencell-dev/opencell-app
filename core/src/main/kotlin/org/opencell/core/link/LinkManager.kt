@@ -93,6 +93,19 @@ class LinkManager(
         wake.trySend(Unit)
     }
 
+    /**
+     * Shows [target] as [LinkState.PairingFailed] without connecting, until the
+     * user retries ([connect]). For a process restarted after it was killed
+     * during or after a failed pairing: a connect would start a system pairing
+     * nobody is there to answer, and cost one of the terminal's 3 tries.
+     */
+    suspend fun awaitPairingRetry(target: LinkTarget, reason: String) = control.withLock {
+        job?.cancelAndJoin()
+        job = null
+        _status.value = null
+        _state.value = LinkState.PairingFailed(target, PairingProblem.FAILED, reason)
+    }
+
     suspend fun disconnect() = control.withLock {
         job?.cancelAndJoin()
         job = null
@@ -157,6 +170,10 @@ class LinkManager(
 
                 override fun onPairing() {
                     _state.value = LinkState.Pairing(target)
+                }
+
+                override fun onBonded() {
+                    _state.value = LinkState.Connecting(target, failures + 1)
                 }
 
                 override fun onClosed(reason: String) {
