@@ -125,7 +125,7 @@ fun LinkStrip(vm: MainViewModel, onClick: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             val s = status
             val text = if (state is LinkState.Connected && s != null) {
-                "${state.target?.name ?: "Terminal"} · ${s.stateLabel} · ${s.rssiDbm} dBm"
+                "${state.target?.name ?: "Terminal"} · ${s.stateLabel} · ${s.signalLabel}"
             } else {
                 state.summary()
             }

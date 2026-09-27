@@ -128,4 +128,30 @@ class TerminalStatusTest {
         assertNull(s.sig)
         assertEquals("Unknown (9)", s.sigLabel)
     }
+
+    /** Searching with nothing heard (rssi 0, BLE STATUS's only "nothing heard" sentinel) reads "No signal", not "0 dBm". */
+    @Test
+    fun searchingWithNothingHeardReadsNoSignal() {
+        val raw = bench.copyOf().also { it[0] = TerminalState.SEARCH.code.toByte(); it[4] = 0; it[5] = 0 }
+        val s = TerminalStatus.decode(raw)
+        assertEquals("Search", s.stateLabel)
+        assertEquals("No signal", s.signalLabel)
+    }
+
+    /** Searching with a packet heard shows the usual reading. */
+    @Test
+    fun searchingWithAPacketHeardShowsTheRssi() {
+        val raw = bench.copyOf().also { it[0] = TerminalState.SEARCH.code.toByte() } // bench's rssi is -52
+        val s = TerminalStatus.decode(raw)
+        assertEquals("Search", s.stateLabel)
+        assertEquals("-52 dBm", s.signalLabel)
+    }
+
+    /** Outside SEARCH the terminal is synced to a cell, so 0 dBm (if it ever happened) would be a real reading, not the sentinel. */
+    @Test
+    fun aRealZeroRssiOutsideSearchIsNotHiddenAsNoSignal() {
+        val raw = bench.copyOf().also { it[0] = TerminalState.GRANTED.code.toByte(); it[4] = 0; it[5] = 0 }
+        val s = TerminalStatus.decode(raw)
+        assertEquals("0 dBm", s.signalLabel)
+    }
 }

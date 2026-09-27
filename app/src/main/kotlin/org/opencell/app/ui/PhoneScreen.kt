@@ -299,7 +299,7 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
             val s = status
             InfoRow(
                 "Link",
-                (link.target?.name ?: "Terminal") + if (s != null) " · ${s.stateLabel} · ${s.rssiDbm} dBm" else "",
+                (link.target?.name ?: "Terminal") + if (s != null) " · ${s.stateLabel} · ${s.signalLabel}" else "",
             )
             RegistrationFailure(phone)
         }

@@ -183,6 +183,13 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   "BLE hop (terminal ↔ phone)" section on the `ble-pair` branch.
 - **Voice isn't in this step.** A connected call has the data-frame test
   above, not audio; see Architecture below for where the codec plugs in.
+- The search counts only packets the radio demodulates in the edge tier
+  (LoRa SF7, 500 kHz). Other systems raise the noise floor only, and
+  packets that fail the LoRa header are not reported.
+- BLE STATUS does not carry the terminal's noise floor (shown on its OLED
+  Radio/Status screens only); the app shows "No signal" while searching
+  when nothing was heard.
+- The W12's RSSI is not calibrated against a reference.
 - **QR scanning costs APK size.** CameraX and ZXing add about 8.8 MB to the
   unminified release APK (24.5 → 33.3 MB) and 10.8 MB to the debug APK
   (32.0 → 42.8 MB), measured by building the commits before and after QR

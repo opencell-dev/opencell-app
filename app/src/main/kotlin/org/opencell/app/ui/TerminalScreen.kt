@@ -363,7 +363,7 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
                     InfoRow("Band", s.bandLabel)
                     InfoRow("Tier", s.tierLabel)
                     InfoRow("Signalling", s.sigLabel)
-                    InfoRow("RSSI", "${s.rssiDbm} dBm")
+                    InfoRow("RSSI", s.signalLabel)
                     InfoRow("SNR", if (s.snrQuarterDb == 0 && s.band?.code == 1) "– (FLRC)" else "%.2f dB".format(s.snrDb))
                     InfoRow("TMID", s.tmidHex)
                     InfoRow("Frame", "${s.frame}")

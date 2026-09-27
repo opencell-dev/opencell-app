@@ -152,8 +152,8 @@ class LinkService : LifecycleService() {
                 when {
                     call != null -> call.phase.label + (call.peer?.let { " · " + PhoneNumber.display(it) } ?: "")
                     sig != null -> sig.label + (phone.number?.let { " · " + PhoneNumber.display(it) } ?: "") +
-                        (status?.let { " · ${it.rssiDbm} dBm" } ?: "")
-                    else -> status?.let { "${it.stateLabel} · ${it.bandLabel} · ${it.rssiDbm} dBm" } ?: "Connected"
+                        (status?.let { " · ${it.signalLabel}" } ?: "")
+                    else -> status?.let { "${it.stateLabel} · ${it.bandLabel} · ${it.signalLabel}" } ?: "Connected"
                 }
             }
             is LinkState.WaitingToReconnect -> "Link lost, retrying in ${state.delay.inWholeSeconds.coerceAtLeast(1)} s"

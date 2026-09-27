@@ -99,6 +99,16 @@ data class TerminalStatus(
     val sigLabel: String get() = sig?.label ?: "Unknown ($sigCode)"
     val tmidHex: String get() = Tmid.format(tmid)
 
+    /**
+     * The terminal's radio signal, for display alongside [stateLabel]. While
+     * searching, rssi is the strongest packet heard in the terminal's recent
+     * scan, with [snrDb]; but BLE STATUS carries no noise floor or "heard"
+     * flag, so 0 there is the only way to say nothing was heard, and would
+     * otherwise show as a misleadingly strong "0 dBm". Every other state
+     * always has a real reading (the terminal is synced to a cell).
+     */
+    val signalLabel: String get() = if (state == TerminalState.SEARCH && rssiDbm == 0) "No signal" else "$rssiDbm dBm"
+
     /** Packs this status exactly like `lc_term_pack_status()`. Used by the simulator and tests. */
     fun encode(): ByteArray {
         val buf = ByteBuffer.allocate(GattContract.STATUS_LEN).order(ByteOrder.LITTLE_ENDIAN)
