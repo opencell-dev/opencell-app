@@ -232,7 +232,7 @@ internal class GattConnection(
         withTimeoutOrNull(CONNECT_TIMEOUT) { connected.await() }
             ?: throw GattException("connect timed out")
 
-        var bondedBefore = device.bondState == BluetoothDevice.BOND_BONDED
+        val bondedBefore = device.bondState == BluetoothDevice.BOND_BONDED
         if (!bondedBefore) bond()
         try {
             try {
@@ -244,8 +244,11 @@ internal class GattConnection(
                 if (device.bondState != BluetoothDevice.BOND_BONDING) throw e
                 Log.i(TAG, "Android is pairing during setup (${e.message})")
                 bond()
-                bondedBefore = false
-                setUp()
+                // Bonded, but the timed-out op may still get its callback, and callbacks
+                // match ops by kind only: don't set up again here. A link loss (not a
+                // pairing failure) makes LinkManager reconnect on a fresh connection,
+                // which is bonded now, so it asks for no code and costs no try.
+                throw GattException("paired; reconnecting")
             }
         } catch (e: GattException) {
             // A refused CCCD write, or the link dropping while the phone re-encrypts

@@ -309,12 +309,15 @@ class GattConnectorTest {
      * One UI may start its own pairing when the terminal lacks the phone's key: a
      * setup op then hangs while the bond is BONDING. That is pairing, not a dead
      * link: wait for it (the passkey dialog is up) instead of dropping the link.
+     * Once bonded, that connection is given up as a link loss (not a pairing
+     * failure): the timed-out op's callback may still come, so the next attempt
+     * is a fresh connection, which is bonded and asks for no code.
      */
     @Test
     @Config(shadows = [CccdGatt::class])
     fun aSystemPairingDuringSetupIsWaitedForNotDropped() = runTest {
         CccdGatt.hold = true
-        val c = async { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) }
+        val c = async { runCatching { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) } }
         runCurrent()
         bondState(BluetoothDevice.BOND_BONDING)
         advanceTimeBy(6_000) // past OP_TIMEOUT
@@ -323,10 +326,28 @@ class GattConnectorTest {
         assertFalse("the link is kept for the pairing", shadowOf(gatt).isClosed)
         assertEquals(1, pairing)
 
-        CccdGatt.hold = false
+        CccdGatt.hold = false // setting up again on this connection would now succeed
         bondState(BluetoothDevice.BOND_BONDED)
-        assertEquals(WriteResult.Accepted, c.await().writeCommand(Command.Reject.encode()))
+        val e = c.await().exceptionOrNull()
+        assertTrue("a link loss, so LinkManager reconnects: $e", e is ConnectException)
         assertEquals(1, bonded)
+        val first = gatt!!
+        assertTrue("given up, not set up again", shadowOf(first).isClosed)
+
+        // The reconnect: bonded now, so no code prompt. Its first CCCD write is pending
+        // when the timed-out op's late callback turns up on the old connection.
+        CccdGatt.hold = true
+        val again = async { GattConnector(app).connect(LinkTarget(ADDRESS, null), events) }
+        runCurrent()
+        assertTrue("a fresh GATT client", gatt !== first)
+        shadowOf(first).gattCallback.onDescriptorWrite(first, cccd(), GattContract.ATT_ERR_INSUFFICIENT_AUTHENTICATION)
+        runCurrent()
+        assertFalse("the stale callback completed nothing in the new attempt", again.isCompleted)
+
+        CccdGatt.hold = false
+        shadowOf(gatt).gattCallback.onDescriptorWrite(gatt, cccd(), BluetoothGatt.GATT_SUCCESS)
+        assertEquals(WriteResult.Accepted, again.await().writeCommand(Command.Reject.encode()))
+        assertEquals("no second code prompt", 1, pairing)
     }
 
     /** ... and a system pairing that fails is a pairing failure (no automatic retry), not a link loss. */
@@ -401,6 +422,8 @@ class GattConnectorTest {
         val e = runCatching { connect() }.exceptionOrNull()
         assertTrue("$e", e is ConnectException)
     }
+
+    private fun cccd() = BluetoothGattDescriptor(GattContract.CCCD, BluetoothGattDescriptor.PERMISSION_WRITE)
 
     private fun terminalService() = BluetoothGattService(GattContract.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
         val write = BluetoothGattCharacteristic.PROPERTY_WRITE
