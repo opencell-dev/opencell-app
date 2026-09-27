@@ -98,6 +98,16 @@ sealed interface PhoneInput {
     /** The first STATUS read after (re)connecting: events may have been lost, so reconcile everything. */
     data class Resync(val sig: SigState, val remembered: Remembered? = null) : PhoneInput
 
+    /**
+     * A clock tick with no event of its own. The firmware only notifies STATUS on
+     * change and can drop EVENTs, so a STATUS held back by [PhoneReducer.RECONCILE_GRACE_MS]
+     * (it disagreed with a call the app had just changed locally) would otherwise never get
+     * re-examined if nothing else happens. [PhoneReducer.reduce] reconciles against the last
+     * known STATUS after every input, including this one, once the grace has elapsed;
+     * [PhoneReducer.reconcileDueAt] tells a caller when to schedule the next one.
+     */
+    data class Tick(val now: Long) : PhoneInput
+
     data object LinkDown : PhoneInput
 
     /** The terminal accepted ACTIVATE for a code for [number]. */
@@ -128,19 +138,36 @@ sealed interface PhoneInput {
  * is the authoritative state. A STATUS notification can be older than an
  * accepted command (it may have been sent just before the terminal took the
  * command), so ordinary STATUS updates only correct the call after
- * [RECONCILE_GRACE_MS] without local changes. The first STATUS after a
- * reconnect ([PhoneInput.Resync]) corrects everything at once.
+ * [RECONCILE_GRACE_MS] without local changes; [reduce] re-checks this after
+ * every input (not just STATUS), so a [PhoneInput.Tick] can carry a held
+ * correction through even if the firmware sends no further STATUS (it only
+ * notifies on change, and can drop EVENTs). The first STATUS after a
+ * reconnect ([PhoneInput.Resync]) corrects everything at once, including a
+ * still-ringing call whose caller can no longer be trusted to be the same one.
  */
 object PhoneReducer {
     const val RECONCILE_GRACE_MS = 2_000L
 
-    fun reduce(s: PhoneState, input: PhoneInput, now: Long): PhoneState = when (input) {
+    fun reduce(s: PhoneState, input: PhoneInput, now: Long): PhoneState =
+        reconcileIfDue(apply(s, input, now), now)
+
+    /**
+     * When a STATUS held back by [RECONCILE_GRACE_MS] will next need reconciling
+     * (so a caller can schedule a [PhoneInput.Tick] then), or null if none is pending.
+     */
+    fun reconcileDueAt(s: PhoneState): Long? {
+        val sig = s.sig ?: return null
+        return if (disagrees(s.activeCall, sig)) s.callChangedAt + RECONCILE_GRACE_MS else null
+    }
+
+    private fun apply(s: PhoneState, input: PhoneInput, now: Long): PhoneState = when (input) {
         is PhoneInput.Event -> event(s, input.event, now)
-        is PhoneInput.Status -> {
-            val t = s.copy(sig = input.sig)
-            if (now - s.callChangedAt >= RECONCILE_GRACE_MS) reconcileCall(t, input.sig, now) else t
-        }
+        is PhoneInput.Status -> s.copy(
+            sig = input.sig,
+            regFailureCode = if (input.sig == SigState.REGISTERING) s.regFailureCode else null,
+        )
         is PhoneInput.Resync -> resync(s, input, now)
+        is PhoneInput.Tick -> s
         PhoneInput.LinkDown -> s.copy(linkUp = false)
         is PhoneInput.Activating -> s.copy(activation = Activation.InProgress(input.number), notice = null)
         is PhoneInput.Dialled -> s.copy(
@@ -220,7 +247,11 @@ object PhoneReducer {
     }
 
     private fun resync(s: PhoneState, r: PhoneInput.Resync, now: Long): PhoneState {
-        var t = s.copy(linkUp = true, sig = r.sig)
+        var t = s.copy(
+            linkUp = true,
+            sig = r.sig,
+            regFailureCode = if (r.sig == SigState.REGISTERING) s.regFailureCode else null,
+        )
         if (r.sig == SigState.NOT_ACTIVATED) {
             t = t.copy(number = null, mode = null)
         } else if (t.number == null && r.remembered != null) {
@@ -231,17 +262,35 @@ object PhoneReducer {
             r.sig != SigState.ACTIVATING && t.activation is Activation.InProgress -> t.copy(activation = Activation.Interrupted)
             else -> t
         }
-        return reconcileCall(t, r.sig, now)
+        val reconciled = reconcileCall(t, r.sig, now)
+        // The terminal doesn't queue EVENTs while no phone is connected: a call still ringing-in
+        // across a resync might not be the same one the app saw before, so its id and caller
+        // (if any) can no longer be trusted. Dropping them also lets a later ENDED for a call the
+        // app never saw the INCOMING for be accepted instead of ignored as "for an earlier call".
+        val call = reconciled.call
+        return if (call != null && call.phase == CallPhase.INCOMING && (call.id != null || call.peer != null)) {
+            reconciled.copy(call = call.copy(id = null, peer = null), callChangedAt = now)
+        } else {
+            reconciled
+        }
+    }
+
+    /** If a STATUS was held back by [RECONCILE_GRACE_MS] and that grace has now elapsed, reconcile the call against it. */
+    private fun reconcileIfDue(s: PhoneState, now: Long): PhoneState {
+        val sig = s.sig ?: return s
+        if (now - s.callChangedAt < RECONCILE_GRACE_MS) return s
+        return reconcileCall(s, sig, now)
     }
 
     private fun reconcileCall(s: PhoneState, sig: SigState, now: Long): PhoneState {
         val c = s.activeCall
+        if (!disagrees(c, sig)) return s
         if (!sig.hasCall) {
-            return if (c == null) s else s.copy(call = c.copy(phase = CallPhase.ENDED, causeCode = null, answering = false), callChangedAt = now)
+            return s.copy(call = c!!.copy(phase = CallPhase.ENDED, causeCode = null, answering = false), callChangedAt = now)
         }
         val phase = phaseOf(sig)
-        return when {
-            c == null || !continues(c.phase, phase) -> s.copy(
+        return if (c == null || !continues(c.phase, phase)) {
+            s.copy(
                 call = Call(
                     id = null,
                     direction = when (sig) {
@@ -255,12 +304,19 @@ object PhoneReducer {
                 ),
                 callChangedAt = now,
             )
-            c.phase != phase -> s.copy(
+        } else {
+            s.copy(
                 call = c.copy(phase = phase, connectedAt = c.connectedAt ?: if (phase == CallPhase.CONNECTED) now else null),
                 callChangedAt = now,
             )
-            else -> s
         }
+    }
+
+    /** Whether [sig] disagrees with the current active call [c] enough that reconciling would change it. */
+    private fun disagrees(c: Call?, sig: SigState): Boolean {
+        if (!sig.hasCall) return c != null
+        val phase = phaseOf(sig)
+        return c == null || !continues(c.phase, phase) || c.phase != phase
     }
 
     /** Whether [next] can follow [from] within one call; otherwise STATUS shows a different, newer call. */

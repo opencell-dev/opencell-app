@@ -185,4 +185,51 @@ class PhoneReducerTest {
         assertEquals("No answer from the network", s.regFailure?.text)
         assertNull(run(s, ev(TerminalEvent.Registered(me, 1))).regFailure)
     }
+
+    /**
+     * The firmware only notifies STATUS on change and can drop EVENTs: if the ENDED for a call
+     * is lost and the only STATUS to arrive lands inside the 2 s grace, nothing else corrects the
+     * call unless something ticks the reducer again.
+     */
+    @Test
+    fun heldStatusIsReconciledByALaterTick() {
+        val calling = PhoneReducer.reduce(registered, PhoneInput.Dialled(peer), 10_000)
+        val held = PhoneReducer.reduce(calling, PhoneInput.Status(SigState.REGISTERED), 10_500)
+        assertEquals(CallPhase.CALLING, held.call?.phase)
+        val ticked = PhoneReducer.reduce(held, PhoneInput.Tick(10_000 + PhoneReducer.RECONCILE_GRACE_MS + 100), 10_000 + PhoneReducer.RECONCILE_GRACE_MS + 100)
+        assertEquals(CallPhase.ENDED, ticked.call?.phase)
+        assertNull(ticked.call?.causeCode)
+    }
+
+    @Test
+    fun tickWithAnAgreeingStatusChangesNothing() {
+        val calling = PhoneReducer.reduce(registered, PhoneInput.Dialled(peer), 10_000)
+        val agreeing = PhoneReducer.reduce(calling, PhoneInput.Status(SigState.CALLING), 10_050)
+        val ticked = PhoneReducer.reduce(agreeing, PhoneInput.Tick(20_000), 20_000)
+        assertEquals(agreeing.call, ticked.call)
+    }
+
+    @Test
+    fun resyncClearsARegistrationFailure() {
+        val failing = run(registered.copy(sig = SigState.REGISTERING), ev(TerminalEvent.RegistrationFailed(4)))
+        assertEquals(4, failing.regFailureCode)
+        val s = run(failing, PhoneInput.LinkDown, PhoneInput.Resync(SigState.REGISTERED))
+        assertNull(s.regFailure)
+    }
+
+    /**
+     * A call still ringing-in across a resync might not be the one the app saw before: the
+     * terminal doesn't queue EVENTs while disconnected, so a new call could have arrived and
+     * replaced it without the app ever getting an INCOMING for it.
+     */
+    @Test
+    fun resyncIntoAStillRingingCallForgetsTheOldCallerSoALaterEndedIsAccepted() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(5, peer)))
+        assertEquals(Call(5, Direction.INCOMING, peer, CallPhase.INCOMING), ringing.call)
+        val s = run(ringing, PhoneInput.LinkDown, PhoneInput.Resync(SigState.RINGING_IN))
+        assertEquals(Call(null, Direction.INCOMING, null, CallPhase.INCOMING), s.call)
+        val ended = run(s, ev(TerminalEvent.Ended(6, 2)))
+        assertEquals(CallPhase.ENDED, ended.call?.phase)
+        assertEquals(EndCause.BUSY, ended.call?.cause)
+    }
 }
