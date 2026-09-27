@@ -46,6 +46,9 @@ class FakeLink(
     val statusFlow = MutableStateFlow<TerminalStatus?>(null)
     override val status: StateFlow<TerminalStatus?> get() = statusFlow
 
+    /** When true, [refreshStatus] fails (returns null) without disturbing [statusFlow]'s cached value. */
+    var refreshFails: Boolean = false
+
     val commands = mutableListOf<ByteArray>()
     val commandResults = ArrayDeque<WriteResult>()
 
@@ -86,5 +89,5 @@ class FakeLink(
         check(_downlink.tryEmit(Downlink(payload, timeSource.markNow(), 0L)))
     }
 
-    override suspend fun refreshStatus(): TerminalStatus? = statusFlow.value
+    override suspend fun refreshStatus(): TerminalStatus? = if (refreshFails) null else statusFlow.value
 }

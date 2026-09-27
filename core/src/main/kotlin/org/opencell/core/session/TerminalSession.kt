@@ -22,17 +22,19 @@ import org.opencell.core.link.UplinkSender
 import org.opencell.core.loopback.LoopbackConfig
 import org.opencell.core.loopback.LoopbackReport
 import org.opencell.core.loopback.LoopbackRunner
+import org.opencell.core.phone.PhoneMemory
+import org.opencell.core.phone.PhoneSession
+import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalState
 import kotlin.time.TimeSource
 
 /**
- * Everything the diagnostics app does with one terminal, independent of
- * Android: the link (with reconnects), UP sending with retries, the console
- * log and the loopback test. The Android layer only supplies a [Connector]
- * and a long-lived [scope].
+ * Everything the app does with one terminal, independent of Android: the
+ * link (with reconnects), UP sending with retries, the phone (activation,
+ * registration, calls), the console log and the loopback test. The Android
+ * layer only supplies a [Connector], a long-lived [scope] and a [PhoneMemory].
  *
- * Future layers (call control, codec) will sit next to the console/loopback
- * here and use [link] and [sender] the same way.
+ * The voice codec will sit next to [phone] and use [link] the same way.
  */
 class TerminalSession(
     connector: Connector,
@@ -41,10 +43,12 @@ class TerminalSession(
     wallClock: () -> Long = System::currentTimeMillis,
     retryPolicy: RetryPolicy = RetryPolicy(),
     reconnect: Backoff = Backoff.RECONNECT,
+    phoneMemory: PhoneMemory = PhoneMemory.inMemory(),
 ) {
     val link = LinkManager(connector, scope, reconnect, timeSource, wallClock)
     val sender = UplinkSender(link, retryPolicy)
     val console = ConsoleLog(wallClock = wallClock)
+    val phone = PhoneSession(link, sender, scope, phoneMemory, { kind, text -> console.add(kind, text) }, wallClock)
     private val runner = LoopbackRunner(link, sender, timeSource)
 
     private val _loopback = MutableStateFlow<LoopbackReport?>(null)
@@ -65,6 +69,14 @@ class TerminalSession(
                 if (code != null) {
                     val name = TerminalState.fromCode(code)?.label ?: "unknown ($code)"
                     console.add(ConsoleKind.INFO, "Terminal state: $name")
+                }
+            }
+        }
+        scope.launch {
+            link.status.map { it?.sigCode }.distinctUntilChanged().collect { code ->
+                if (code != null) {
+                    val name = SigState.fromCode(code)?.label ?: "unknown ($code)"
+                    console.add(ConsoleKind.INFO, "Signalling state: $name")
                 }
             }
         }
