@@ -138,6 +138,10 @@ class SimulatedTerminal(
     @Volatile
     var failNextConnect: PairingProblem? = null
 
+    /** False makes this behave like v3 firmware with no SCAN characteristic, for tests. */
+    @Volatile
+    var scanSupported: Boolean = true
+
     /** The signalling state (STATUS byte 3), for tests. */
     val sigState: SigState get() = synchronized(lock) { sig }
 
@@ -539,7 +543,7 @@ class SimulatedTerminal(
 
         override suspend fun readScan(): ByteArray? {
             delay(bleDelay)
-            return synchronized(lock) { if (closed) null else scanList().encode() }
+            return synchronized(lock) { if (closed || !scanSupported) null else scanList().encode() }
         }
 
         override fun close() {

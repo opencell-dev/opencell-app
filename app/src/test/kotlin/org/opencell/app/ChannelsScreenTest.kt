@@ -17,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.CHANNEL_PICKER
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.session.ChannelSession
 import org.robolectric.annotation.Config
 
 /** The Channels tab against the demo terminal (channel-list spec §9): live scan line, list, user channels. */
@@ -70,5 +71,23 @@ class ChannelsScreenTest {
         compose.onNodeWithText("Apply").performClick()
         compose.waitUntil(10_000) { compose.activity.graph.session.channels.list.value?.fallbackAfter == 3 }
         assertEquals(13, compose.activity.graph.session.channels.list.value!!.fallbackChunk)
+    }
+
+    /** Connected, v3 firmware (no SCAN): the update-it problem, not the "connect a terminal" line too. */
+    @Test
+    fun aV3TerminalShowsOnlyTheUpdateLine() {
+        compose.activity.graph.simulator.scanSupported = false
+        openChannelsOnTheDemoTerminal()
+        compose.waitForText(ChannelSession.NO_SCAN)
+        compose.onNodeWithText("No scan list yet: connect a terminal on the Terminal tab.").assertDoesNotExist()
+    }
+
+    /** Not connected: the "connect a terminal" line, not the firmware problem (there is none to show). */
+    @Test
+    fun disconnectedShowsOnlyTheConnectLine() {
+        compose.waitForText("No terminal connected")
+        compose.onNodeWithText("Channels").performClick()
+        compose.waitForText("No scan list yet: connect a terminal on the Terminal tab.")
+        compose.onNodeWithText(ChannelSession.NO_SCAN).assertDoesNotExist()
     }
 }

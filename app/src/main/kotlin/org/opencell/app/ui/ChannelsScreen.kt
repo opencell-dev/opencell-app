@@ -1,6 +1,5 @@
 package org.opencell.app.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -39,6 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.core.protocol.ChannelGrid
@@ -85,12 +88,19 @@ fun ChannelsScreen(vm: MainViewModel) {
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
-            problem?.let { p -> item { Text(p, color = MaterialTheme.colorScheme.error) } }
             val l = list
             if (l == null) {
-                item { Text("No scan list yet: connect a terminal on the Terminal tab.") }
+                // Connected with no SCAN (v3 firmware): the problem line already says to update it,
+                // so showing "connect a terminal" too would contradict it. Not connected: no problem
+                // is ever set (ChannelSession clears it on disconnect), so only the connect line shows.
+                if (state.isConnected) {
+                    problem?.let { p -> item { Text(p, color = MaterialTheme.colorScheme.error) } }
+                } else {
+                    item { Text("No scan list yet: connect a terminal on the Terminal tab.") }
+                }
                 return@LazyColumn
             }
+            problem?.let { p -> item { Text(p, color = MaterialTheme.colorScheme.error) } }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -146,11 +156,15 @@ private fun FallbackCard(l: ScanList, onApply: (Int, Int) -> Unit) {
             Text("Search outside the list", style = MaterialTheme.typography.titleSmall)
             Stepper(
                 label = if (after >= ScanList.NEVER) "Never" else "After $after pass${if (after == 1) "" else "es"}",
+                minusDescription = "Decrease passes before sweep",
+                plusDescription = "Increase passes before sweep",
                 onMinus = { after = (after - 1).coerceAtLeast(0) },
                 onPlus = { after = (after + 1).coerceAtMost(ScanList.NEVER) },
             )
             Stepper(
                 label = "$chunk channels a round",
+                minusDescription = "Decrease channels a round",
+                plusDescription = "Increase channels a round",
                 onMinus = { chunk = (chunk - 1).coerceAtLeast(1) },
                 onPlus = { chunk = (chunk + 1).coerceAtMost(ChannelGrid.COUNT) },
             )
@@ -163,11 +177,23 @@ private fun FallbackCard(l: ScanList, onApply: (Int, Int) -> Unit) {
 }
 
 @Composable
-private fun Stepper(label: String, onMinus: () -> Unit, onPlus: () -> Unit) {
+private fun Stepper(
+    label: String,
+    minusDescription: String,
+    plusDescription: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = onMinus) { Text("−", Modifier.width(16.dp)) }
+        TextButton(
+            onClick = onMinus,
+            modifier = Modifier.semantics { contentDescription = minusDescription },
+        ) { Text("−", Modifier.width(16.dp)) }
         Text(label, Modifier.weight(1f))
-        TextButton(onClick = onPlus) { Text("+", Modifier.width(16.dp)) }
+        TextButton(
+            onClick = onPlus,
+            modifier = Modifier.semantics { contentDescription = plusDescription },
+        ) { Text("+", Modifier.width(16.dp)) }
     }
 }
 
@@ -180,8 +206,11 @@ private fun AddChannelDialog(onPick: (Long, Boolean) -> Unit, onDismiss: () -> U
         title = { Text("Add a channel") },
         text = {
             Column {
-                Row(Modifier.clickable { fixed = !fixed }, verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = fixed, onCheckedChange = { fixed = it })
+                Row(
+                    Modifier.toggleable(value = fixed, onValueChange = { fixed = it }, role = Role.Checkbox),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = fixed, onCheckedChange = null)
                     Text("Fixed sync (Part 97 cells only)")
                 }
                 LazyColumn(Modifier.heightIn(max = 360.dp).testTag(CHANNEL_PICKER)) {
