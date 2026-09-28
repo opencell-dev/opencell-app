@@ -360,6 +360,7 @@ fun StatusContent(vm: MainViewModel, compact: Boolean) {
                     InfoRow("Band", s.bandLabel)
                     InfoRow("Tier", s.tierLabel)
                     InfoRow("Signalling", s.sigLabel)
+                    s.scanLabel?.let { InfoRow("Scan", it) }
                     InfoRow("RSSI", s.signalLabel)
                     InfoRow("SNR", s.snrLabel)
                     InfoRow("TMID", s.tmidHex)

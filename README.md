@@ -10,9 +10,14 @@ interface and holds no secrets. The app:
 - places calls, rings for incoming calls itself (a looping ringtone and
   vibration, whatever screen is showing), answers, rejects and hangs up;
 - offers a data-frame test in a connected call (voice is not in this step);
+- shows and edits the terminal's scan list (**Channels** tab): where it is looking
+  for a cell right now, the channels it tries in order and where each came from,
+  up to 4 channels of your own, and when to search outside the list;
 - keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test.
 
-The BLE contract (v3) is `firmware/components/oc_term/include/oc_term_gatt.h`.
+The BLE contract (v4) is `firmware/components/oc_term/include/oc_term_gatt.h`.
+v4 adds the scan list: the SCAN characteristic, COMMAND 0x07 and 7 more STATUS bytes.
+Firmware older than v4 has no SCAN; the Channels tab then says to update it.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
 A terminal still on v2-numbering firmware refuses v3 DIAL/ACTIVATE arguments and sends
 v2-length EVENTs; the app can't tell that from a genuinely bad argument or number, so it
@@ -223,7 +228,8 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   phone/     PhoneReducer  (pure state machine: EVENTs, STATUS byte 3, accepted commands)
              PhoneSession  (commands, resync on connect, in-call data test)
   loopback/  LoopbackRunner, LoopbackStats
-  session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
+  session/   TerminalSession (link + sender + phone + console + loopback + channels),
+             ChannelSession (scan list: SCAN reads, COMMAND SCAN), ConsoleLog
   sim/       SimulatedTerminal (terminal + network: demo mode and tests)
 :app   (Android)
   ble/       GattConnector/GattConnection (serialized GATT ops), Bonder (createBond +
@@ -233,7 +239,7 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   service/   LinkService (connectedDevice foreground service, owns ringing via
              RingPlan), CallRinger, CallNotifier, CallActionReceiver
   ui/        Compose: Phone (activation, home, dialer), CallScreen/CallActivity,
-             Terminal/Status, Console, Loopback
+             Terminal/Status, Channels, Console, Loopback
 ```
 
 The link lives in the Application, not in an Activity or ViewModel.
