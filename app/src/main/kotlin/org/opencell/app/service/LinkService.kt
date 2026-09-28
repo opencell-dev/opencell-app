@@ -23,6 +23,7 @@ import org.opencell.app.R
 import org.opencell.app.graph
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.link.LinkState
+import org.opencell.core.phone.PhoneSession
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.TerminalStatus
@@ -151,7 +152,7 @@ class LinkService : LifecycleService() {
                 val call = phone?.activeCall
                 val sig = phone?.sig
                 when {
-                    call != null -> call.phase.label + (call.peer?.let { " · " + PhoneNumber.display(it) } ?: "")
+                    call != null -> call.phase.label + (call.peer?.let { " · " + PhoneSession.peerLabel(it, phone.number) } ?: "")
                     sig != null -> sig.label + (phone.number?.let { " · " + PhoneNumber.display(it) } ?: "") +
                         (status?.let { " · ${it.signalLabel}" } ?: "")
                     else -> status?.let { "${it.stateLabel} · ${it.bandLabel} · ${it.signalLabel}" } ?: "Connected"

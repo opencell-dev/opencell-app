@@ -201,7 +201,7 @@ private fun ActivationResult(vm: MainViewModel, phone: PhoneState) {
             // Once registered, the home screen takes over by itself.
             LaunchedEffect(phone.sig) { if (phone.sig == SigState.REGISTERED) vm.finishActivation() }
             Text("Activated", style = MaterialTheme.typography.headlineSmall)
-            Text("Number ${PhoneNumber.display(a.number)}", style = MaterialTheme.typography.titleMedium)
+            Text("Number ${a.number?.let(PhoneNumber::display) ?: "not known (invalid number from the terminal)"}", style = MaterialTheme.typography.titleMedium)
             val failure = phone.regFailureCode
             if (failure == null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -402,7 +402,7 @@ private fun Dialer(vm: MainViewModel, enabled: Boolean, home: String?) {
             Text("Make a call", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             OutlinedTextField(
                 value = vm.dialInput,
-                onValueChange = { vm.dialInput = it },
+                onValueChange = vm::onDialInputChange,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Number (606-555-01234 or +883-1-…)") },
                 singleLine = true,
@@ -422,7 +422,7 @@ private fun Dialer(vm: MainViewModel, enabled: Boolean, home: String?) {
                     Text("Call")
                 }
                 AssistChip(
-                    onClick = { vm.dialInput = SimulatedTerminal.PEER; vm.dial(SimulatedTerminal.PEER) },
+                    onClick = { vm.onDialInputChange(SimulatedTerminal.PEER); vm.dial(SimulatedTerminal.PEER) },
                     label = { Text("Test peer") },
                     enabled = enabled,
                 )

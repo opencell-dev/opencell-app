@@ -55,7 +55,8 @@ sealed interface Activation {
     /** ACTIVATE accepted; waiting for ACTIVATED or ACT_FAILED. [number] is the QR's, null after a resync. */
     data class InProgress(val number: String?) : Activation
 
-    data class Succeeded(val number: String) : Activation
+    /** [number] is null when ACTIVATED/REGISTERED carried an invalid number ([TerminalEvent] §6.3): unknown, not remembered. */
+    data class Succeeded(val number: String?) : Activation
 
     data class Failed(val reasonCode: Int) : Activation {
         val reason: ActFailReason? get() = ActFailReason.fromCode(reasonCode)
@@ -227,18 +228,20 @@ object PhoneReducer {
 
     private fun event(s: PhoneState, e: TerminalEvent, now: Long, wallNow: Long): PhoneState = when (e) {
         is TerminalEvent.Activated -> s.copy(
-            number = e.number,
-            activation = Activation.Succeeded(e.number),
+            // An invalid number (e.number == null) isn't remembered: the terminal's already-known number, if any, stands.
+            number = e.number ?: s.number,
+            activation = Activation.Succeeded(e.number ?: s.number),
             sig = SigState.REGISTERING,
             regFailureCode = null,
         )
         is TerminalEvent.ActivationFailed -> s.copy(activation = Activation.Failed(e.reasonCode))
         is TerminalEvent.Registered -> s.copy(
-            number = e.number,
+            // An invalid number (e.number == null) isn't remembered: the terminal's already-known number, if any, stands.
+            number = e.number ?: s.number,
             mode = e.mode,
             sig = SigState.REGISTERED,
             regFailureCode = null,
-            activation = if (s.activation is Activation.InProgress) Activation.Succeeded(e.number) else s.activation,
+            activation = if (s.activation is Activation.InProgress) Activation.Succeeded(e.number ?: s.number) else s.activation,
         )
         is TerminalEvent.RegistrationFailed -> s.copy(regFailureCode = e.reasonCode)
         is TerminalEvent.Incoming -> s.copy(

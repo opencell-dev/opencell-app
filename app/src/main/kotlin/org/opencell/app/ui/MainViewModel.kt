@@ -191,8 +191,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var reactivating by mutableStateOf(false)
 
     var dialInput by mutableStateOf("")
+        private set
     var dialError by mutableStateOf<String?>(null)
         private set
+
+    /** As the user edits the dial field: a stale refusal from an earlier attempt must not hide the live hint. */
+    fun onDialInputChange(text: String) {
+        dialInput = text
+        dialError = null
+    }
 
     /** A scanned or pasted code, checked like the terminal checks it. Valid codes wait for [confirmActivation]. */
     fun onCode(text: String) {

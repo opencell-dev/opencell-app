@@ -39,7 +39,6 @@ import org.opencell.core.phone.CallData
 import org.opencell.core.phone.CallPhase
 import org.opencell.core.phone.Direction
 import org.opencell.core.phone.PhoneSession
-import org.opencell.core.protocol.PhoneNumber
 
 /**
  * Outgoing, incoming, in-call and ended screens, shown full-screen over the app
@@ -78,7 +77,7 @@ fun CallScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                call.peer?.let { PhoneNumber.display(it) } ?: if (call.direction == Direction.INCOMING) "Unknown caller" else "Unknown number",
+                call.peer?.let { PhoneSession.peerLabel(it, phone.number) } ?: if (call.direction == Direction.INCOMING) "Unknown caller" else "Unknown number",
                 style = MaterialTheme.typography.headlineLarge,
                 textAlign = TextAlign.Center,
             )

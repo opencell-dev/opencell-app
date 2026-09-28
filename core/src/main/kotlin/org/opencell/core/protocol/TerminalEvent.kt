@@ -63,10 +63,11 @@ sealed interface TerminalEvent {
     val label: String
     fun encode(): ByteArray
 
-    data class Activated(val number: String) : TerminalEvent {
+    /** [number] is null when the terminal sent a v3-length number that isn't canonical/valid BCD (§6.3): treated like an unknown number, never misread. */
+    data class Activated(val number: String?) : TerminalEvent {
         override val code get() = ACTIVATED
-        override val label get() = "activated ${PhoneNumber.display(number)}"
-        override fun encode() = byteArrayOf(code.toByte()) + PhoneNumber.toBcd(number)
+        override val label get() = "activated ${number?.let(PhoneNumber::display) ?: "an unknown number"}"
+        override fun encode() = byteArrayOf(code.toByte()) + (number?.let(PhoneNumber::toBcd) ?: invalidBcd())
     }
 
     data class ActivationFailed(val reasonCode: Int) : TerminalEvent {
@@ -76,11 +77,12 @@ sealed interface TerminalEvent {
         override fun encode() = byteArrayOf(code.toByte(), reasonCode.toByte())
     }
 
-    data class Registered(val number: String, val modeCode: Int) : TerminalEvent {
+    /** [number] is null when the terminal sent a v3-length number that isn't canonical/valid BCD (§6.3): treated like an unknown number, never misread. */
+    data class Registered(val number: String?, val modeCode: Int) : TerminalEvent {
         val mode: RegMode? get() = RegMode.fromCode(modeCode)
         override val code get() = REGISTERED
-        override val label get() = "registered ${PhoneNumber.display(number)} (${mode?.label ?: "mode $modeCode"})"
-        override fun encode() = byteArrayOf(code.toByte()) + PhoneNumber.toBcd(number) + modeCode.toByte()
+        override val label get() = "registered ${number?.let(PhoneNumber::display) ?: "an unknown number"} (${mode?.label ?: "mode $modeCode"})"
+        override fun encode() = byteArrayOf(code.toByte()) + (number?.let(PhoneNumber::toBcd) ?: invalidBcd()) + modeCode.toByte()
     }
 
     data class RegistrationFailed(val reasonCode: Int) : TerminalEvent {
@@ -90,10 +92,11 @@ sealed interface TerminalEvent {
         override fun encode() = byteArrayOf(code.toByte(), reasonCode.toByte())
     }
 
-    data class Incoming(val callId: Long, val caller: String) : TerminalEvent {
+    /** [caller] is null when the terminal sent a v3-length number that isn't canonical/valid BCD (§6.3): treated like an unknown caller, never misread. */
+    data class Incoming(val callId: Long, val caller: String?) : TerminalEvent {
         override val code get() = INCOMING
-        override val label get() = "incoming call $callId from ${PhoneNumber.display(caller)}"
-        override fun encode() = byteArrayOf(code.toByte()) + u32(callId) + PhoneNumber.toBcd(caller)
+        override val label get() = "incoming call $callId from ${caller?.let(PhoneNumber::display) ?: "an unknown number"}"
+        override fun encode() = byteArrayOf(code.toByte()) + u32(callId) + (caller?.let(PhoneNumber::toBcd) ?: invalidBcd())
     }
 
     data class Ringing(val callId: Long) : TerminalEvent {
@@ -166,21 +169,22 @@ sealed interface TerminalEvent {
             val n = raw.size - 1
             fun u8(i: Int) = raw[i].toInt() and 0xFF
             val old = OldFirmware(u8(0), Hex.format(raw))
+            fun number(at: Int) = PhoneNumber.fromBcd(raw, at).takeIf { PhoneNumber.isValidBcd(raw, at) }
             return when (u8(0)) {
                 ACTIVATED -> when (n) {
-                    N -> Activated(PhoneNumber.fromBcd(raw, 1))
+                    N -> Activated(number(1))
                     OLD_N -> old
                     else -> unknown
                 }
                 ACT_FAILED -> if (n >= 1) ActivationFailed(u8(1)) else unknown
                 REGISTERED -> when (n) {
-                    N + 1 -> Registered(PhoneNumber.fromBcd(raw, 1), u8(1 + N))
+                    N + 1 -> Registered(number(1), u8(1 + N))
                     OLD_N + 1 -> old
                     else -> unknown
                 }
                 REG_FAILED -> if (n >= 1) RegistrationFailed(u8(1)) else unknown
                 INCOMING -> when (n) {
-                    4 + N -> Incoming(u32(raw, 1), PhoneNumber.fromBcd(raw, 5))
+                    4 + N -> Incoming(u32(raw, 1), number(5))
                     4 + OLD_N -> old
                     else -> unknown
                 }
@@ -196,5 +200,8 @@ sealed interface TerminalEvent {
             (0 until 4).fold(0L) { acc, i -> (acc shl 8) or (raw[at + i].toLong() and 0xFF) }
 
         private fun u32(v: Long): ByteArray = ByteArray(4) { i -> (v shr (24 - 8 * i)).toByte() }
+
+        /** A placeholder for [encode] when the number is unknown (invalid on decode): all filler, itself not a valid number. */
+        private fun invalidBcd(): ByteArray = ByteArray(N) { 0xFF.toByte() }
     }
 }

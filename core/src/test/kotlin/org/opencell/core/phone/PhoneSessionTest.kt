@@ -94,6 +94,40 @@ class PhoneSessionTest {
         assertEquals(hex(Command.Dial("6065551235").encode()), hex(h.link.commands.single()))
     }
 
+    /** I2: ATT 0x81 on DIAL also happens when a v2-firmware terminal refuses v3's longer number argument. */
+    @Test
+    fun dialRefusedWithBadArgumentMentionsOldFirmware() = runTest {
+        val h = harness()
+        h.link.commandResults += WriteResult.BadArgument
+        assertNull(h.phone.dial("+883 1 606 555 0100"))
+        runCurrent()
+        assertEquals(
+            "The terminal refused this number (or the terminal's firmware is older than numbering v2: update it)",
+            h.phone.state.value.notice,
+        )
+    }
+
+    /**
+     * M1: DIAL sent as a national form while this terminal's own number wasn't known yet stores the
+     * raw digits as the call's peer (dial() can't complete them); once the number becomes known
+     * (e.g. a later REGISTERED), the shown label completes and displays them internationally,
+     * without ever inventing a country code for digits that still don't complete.
+     */
+    @Test
+    fun peerLabelCompletesInternationallyOnceTheNumberIsKnown() = runTest {
+        val h = harness()
+        assertNull(h.phone.dial("606 555 1235"))
+        runCurrent()
+        val digits = h.phone.state.value.call?.peer
+        assertEquals("6065551235", digits)
+        assertEquals(digits, PhoneSession.peerLabel(digits!!, h.phone.state.value.number))
+        h.link.emitEvent(TerminalEvent.Registered(me, 1))
+        runCurrent()
+        assertEquals("6065551235", h.phone.state.value.call?.peer) // the stored peer itself is unchanged
+        assertEquals("+883-1-606-555-01235", PhoneSession.peerLabel(digits, h.phone.state.value.number))
+        assertEquals("12345", PhoneSession.peerLabel("12345", me)) // too short to complete: kept, not invented
+    }
+
     @Test
     fun emergencyNumbersAreRefusedWithAReason() = runTest {
         val h = harness()
@@ -191,7 +225,11 @@ class PhoneSessionTest {
         h.phone.activate(qr)
         runCurrent()
         assertEquals(1 + 111, h.link.commands.single().size) // op + the 111-character v2 code
-        assertEquals("The terminal refused this activation code (damaged, or an invalid network key)", h.phone.state.value.notice)
+        assertEquals(
+            "The terminal refused this activation code (damaged, an invalid network key, " +
+                "or the terminal's firmware is older than numbering v2: update it)",
+            h.phone.state.value.notice,
+        )
         assertEquals(Activation.Idle, h.phone.state.value.activation)
     }
 
@@ -213,6 +251,20 @@ class PhoneSessionTest {
         runCurrent()
         assertNull(h.memory.load(address))
         assertNull(h.phone.state.value.number)
+    }
+
+    /** M2: a REGISTERED whose number isn't valid BCD is treated as unknown, not saved over the terminal's known one. */
+    @Test
+    fun invalidRegisteredNumberIsNotRemembered() = runTest {
+        val h = harness(SigState.REGISTERED)
+        h.link.emitEvent(TerminalEvent.Registered(me, 1))
+        runCurrent()
+        assertEquals(me, h.phone.state.value.number)
+        assertEquals(Remembered(me, RegMode.PART15), h.memory.load(address))
+        h.link.emitEvent(TerminalEvent.Registered(null, 1))
+        runCurrent()
+        assertEquals(me, h.phone.state.value.number) // unchanged: the invalid one wasn't adopted
+        assertEquals(Remembered(me, RegMode.PART15), h.memory.load(address))
     }
 
     @Test

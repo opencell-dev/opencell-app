@@ -357,9 +357,13 @@ class PhoneSession(
             Command.Hangup -> "There is no call to hang up"
             Command.Deactivate -> "The terminal can't deactivate during a call"
         }
+        // A v2-firmware terminal refuses v3 DIAL/ACTIVATE arguments with this same ATT error and emits
+        // no event on connect, so the app can't otherwise tell an old terminal from a bad argument.
         WriteResult.BadArgument -> when (cmd) {
-            is Command.Activate -> "The terminal refused this activation code (damaged, or an invalid network key)"
-            is Command.Dial -> "The terminal refused this number"
+            is Command.Activate ->
+                "The terminal refused this activation code (damaged, an invalid network key, " +
+                    "or the terminal's firmware is older than numbering v2: update it)"
+            is Command.Dial -> "The terminal refused this number (or the terminal's firmware is older than numbering v2: update it)"
             else -> "The terminal refused ${cmd.label} (malformed command)"
         }
         WriteResult.TooLong -> "The terminal refused ${cmd.label} (wrong length)"
@@ -370,6 +374,17 @@ class PhoneSession(
     companion object {
         const val BAD_NUMBER = "Not an OpenCell number. Dial 606-555-01234, or +883-1-606-555-01234 from another country."
         const val EMERGENCY = "OpenCell cannot make emergency calls. Use a regular phone."
+
+        /**
+         * How a call's peer should read. An outgoing call dialled as a national form while this
+         * terminal's own number wasn't known yet (see [dial]) stores raw digits as its peer; once
+         * [home] is known (a later REGISTERED, or the call itself connecting), this completes them
+         * into the international display, exactly as [dial] would have sent them at the time. A
+         * peer that still doesn't complete against [home] (or is already a full number) is shown
+         * as-is: this never invents a country code.
+         */
+        fun peerLabel(peer: String, home: String?): String =
+            (PhoneNumber.check(peer, home) as? DialCheck.Number)?.full?.let(PhoneNumber::display) ?: PhoneNumber.display(peer)
 
         /** The line under the dial field as the user types: what DIAL will send, or why it isn't a number. */
         fun dialHint(input: String, home: String?): String = when (val c = PhoneNumber.check(input, home)) {

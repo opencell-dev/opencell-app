@@ -100,6 +100,24 @@ class CommandEventTest {
         )
     }
 
+    /** M2: a v3-length number that isn't canonical/valid BCD is treated like an unknown number, never misread. */
+    @Test
+    fun invalidNumbersInV3EventsAreTreatedAsUnknown() {
+        // NPA "106" (first digit 1, not 2-9): not a valid NANP area code, even though the byte
+        // length is exactly a v3 number's (only the NPA differs from the golden "606" vector).
+        val badActivated = TerminalEvent.decode(bytes("01 88 31 10 65 55 01 23 4f"))
+        assertEquals(TerminalEvent.Activated(null), badActivated)
+        assertEquals("activated an unknown number", badActivated.label)
+
+        val badRegistered = TerminalEvent.decode(bytes("03 88 31 10 65 55 01 23 4f 01"))
+        assertEquals(TerminalEvent.Registered(null, 1), badRegistered)
+        assertEquals("registered an unknown number (Part 15)", badRegistered.label)
+
+        val badIncoming = TerminalEvent.decode(bytes("05 00 00 00 01 88 31 10 65 55 01 23 4f"))
+        assertEquals(TerminalEvent.Incoming(1, null), badIncoming)
+        assertEquals("incoming call 1 from an unknown number", badIncoming.label)
+    }
+
     @Test
     fun dialCarriesAnyDialledForm() {
         assertEquals("02 36 30 36 35 35 35 31 32 33 35", hex(Command.Dial("6065551235").encode()))

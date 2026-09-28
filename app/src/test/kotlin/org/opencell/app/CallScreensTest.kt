@@ -69,6 +69,19 @@ class CallScreensTest {
         compose.onNodeWithText("Your number").assertExists() // no call screen
     }
 
+    /** I1: a stale refusal from an earlier attempt must not hide the live "Dials …" hint as the user keeps typing. */
+    @Test
+    fun typingAfterARefusedNumberClearsTheStaleError() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("12345")
+        compose.onNodeWithText("Call").performClick()
+        compose.waitForText(PhoneSession.BAD_NUMBER)
+        compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("606 555 1235")
+        compose.waitForText("Dials +883-1-606-555-01235")
+        compose.onAllNodesWithText(PhoneSession.BAD_NUMBER).assertCountEquals(0)
+    }
+
     @Test
     fun theDialFieldShowsTheFullFormAsYouType() {
         compose.connectDemoAndOpenPhone()

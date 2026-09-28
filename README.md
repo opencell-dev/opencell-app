@@ -12,8 +12,12 @@ interface and holds no secrets. The app:
 - offers a data-frame test in a connected call (voice is not in this step);
 - keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test.
 
-The BLE contract (v2) is `firmware/components/lc_term/include/lc_term_gatt.h`.
+The BLE contract (v3) is `firmware/components/lc_term/include/lc_term_gatt.h`.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
+A terminal still on v2-numbering firmware refuses v3 DIAL/ACTIVATE arguments and sends
+v2-length EVENTs; the app can't tell that from a genuinely bad argument or number, so it
+shows "Terminal firmware uses old numbers: update it" (or, on a refused command, the same
+explanation folded into the refusal reason) rather than guessing.
 
 ## Build
 

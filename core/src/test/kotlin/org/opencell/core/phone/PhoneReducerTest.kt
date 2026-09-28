@@ -46,6 +46,27 @@ class PhoneReducerTest {
         assertEquals("Activation failed (reason 77)", Activation.Failed(77).text)
     }
 
+    /** M2: ACTIVATED/REGISTERED with an invalid number ([TerminalEvent] decodes it as null) isn't remembered. */
+    @Test
+    fun invalidActivatedOrRegisteredNumberIsNotRemembered() {
+        val start = PhoneState(linkUp = true, sig = SigState.NOT_ACTIVATED)
+        val s1 = run(start, PhoneInput.Activating(me), ev(TerminalEvent.Activated(null)))
+        assertNull(s1.number)
+        assertEquals(Activation.Succeeded(null), s1.activation)
+        assertEquals(SigState.REGISTERING, s1.sig)
+        // A terminal that was already registered keeps its known number: the invalid one isn't adopted.
+        val s2 = run(registered, ev(TerminalEvent.Registered(null, 1)))
+        assertEquals(me, s2.number)
+        assertEquals(SigState.REGISTERED, s2.sig)
+    }
+
+    /** M2: an INCOMING call whose number isn't valid BCD shows as an unknown caller, not garbled digits. */
+    @Test
+    fun invalidIncomingNumberIsAnUnknownCaller() {
+        val s = run(registered, ev(TerminalEvent.Incoming(9, null)))
+        assertEquals(Call(9, Direction.INCOMING, null, CallPhase.INCOMING), s.call)
+    }
+
     @Test
     fun outgoingCallRingsConnectsAndEnds() {
         val calling = run(registered, PhoneInput.Dialled(peer))
