@@ -101,6 +101,7 @@ class GattConnectorTest {
 
     @After
     fun tearDown() {
+        HeldReadGatt.hold = false
         ServiceNotBoundGatt.notBound = false
         CccdGatt.refuseWith = 0
         CccdGatt.hold = false
@@ -441,6 +442,34 @@ class GattConnectorTest {
         c.close()
     }
 
+    /**
+     * Read answers are matched on the characteristic, not just on being a read:
+     * a late SCAN answer (say after a read timed out during a system pairing)
+     * must not complete a pending STATUS read, which would decode it as status.
+     */
+    @Test
+    @Config(shadows = [HeldReadGatt::class])
+    fun aReadAnswerForAnotherCharacteristicDoesNotCompleteThePendingRead() = runTest {
+        scanValue = byteArrayOf(1, 1, 2, 13, 0, 0)
+        val (_, c) = connect()
+        val g = gatt!!
+        val service = g.getService(GattContract.SERVICE)
+        HeldReadGatt.hold = true
+        val read = async { c.readStatus() }
+        runCurrent()
+        assertFalse("the STATUS read is pending", read.isCompleted)
+
+        val lateScan = ByteArray(27) { 0x5a }
+        shadowOf(g).gattCallback.onCharacteristicRead(g, service.getCharacteristic(GattContract.SCAN), lateScan, BluetoothGatt.GATT_SUCCESS)
+        runCurrent()
+        assertFalse("a SCAN answer doesn't complete a STATUS read", read.isCompleted)
+
+        val status = ByteArray(27) { it.toByte() }
+        shadowOf(g).gattCallback.onCharacteristicRead(g, service.getCharacteristic(GattContract.STATUS), status, BluetoothGatt.GATT_SUCCESS)
+        assertEquals(Hex.format(status), Hex.format(read.await()!!))
+        c.close()
+    }
+
     private fun cccd() = BluetoothGattDescriptor(GattContract.CCCD, BluetoothGattDescriptor.PERMISSION_WRITE)
 
     /** The SCAN characteristic's value (contract v4); null: a v3 terminal without SCAN. */
@@ -521,5 +550,18 @@ class CccdGatt : ShadowBluetoothGatt() {
 
         @Volatile
         var dropAfterWith = 0
+    }
+}
+
+/** [ShadowBluetoothGatt] whose characteristic reads start but aren't answered while [hold] is set. */
+@Implements(BluetoothGatt::class)
+class HeldReadGatt : ShadowBluetoothGatt() {
+    @Implementation
+    public override fun readCharacteristic(c: BluetoothGattCharacteristic): Boolean =
+        if (hold) true else super.readCharacteristic(c)
+
+    companion object {
+        @Volatile
+        var hold = false
     }
 }
