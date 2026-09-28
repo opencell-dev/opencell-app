@@ -14,6 +14,7 @@ import org.opencell.core.link.PairingProblem
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.ActFailReason
 import org.opencell.core.protocol.ActivationQr
+import org.opencell.core.protocol.ChannelGrid
 import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.GattContract
@@ -21,6 +22,10 @@ import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.protocol.RegFailReason
 import org.opencell.core.protocol.RegMode
+import org.opencell.core.protocol.ScanEntry
+import org.opencell.core.protocol.ScanList
+import org.opencell.core.protocol.ScanSource
+import org.opencell.core.protocol.ScanTail
 import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalState
@@ -69,7 +74,10 @@ data class SimTiming(
  *   DIAL takes any dialled form and completes it from the terminal's own
  *   number (`oc_sig_number_normalize`); dialling your own number is busy,
  *   [UNREACHABLE] is unreachable;
- * - EVENTs are dropped while no phone is connected, like the firmware's.
+ * - EVENTs are dropped while no phone is connected, like the firmware's;
+ * - it keeps a scan list (contract v4): its cell's anchor ([ANCHOR_HZ]) becomes the last
+ *   serving entry once attached, COMMAND SCAN edits the user entries and fallback like
+ *   `oc_term_gatt_scan_command`, and STATUS carries the scan tail.
  *
  * Signalling state lives here, not in the connection, so a test can drop the
  * BLE link ([dropLink]) and reconnect to a terminal that carried on without it.
@@ -110,6 +118,13 @@ class SimulatedTerminal(
 
     /** HANGUP came while CALLING before CALL_PROC: release once the call id arrives (the firmware's hangup_pending). */
     private var hangupPending = false
+
+    // --- the scan list (oc_term_scan), all under the lock ---
+    private val userChannels = mutableListOf<ScanEntry>()
+    private var fallbackAfter = 2
+    private var fallbackChunk = 13
+    private var lastServing: Long? = null
+    private val learned = mutableListOf<Long>()
 
     /** Makes the next activation fail with this reason (the network's ACT_NAK), then clears itself. */
     @Volatile
@@ -343,6 +358,7 @@ class SimulatedTerminal(
                 sig = SigState.RELEASING
                 later(timing.release) { end(cause) }
             }
+            Command.SCAN -> return scanCommand(a)
             Command.DEACTIVATE -> {
                 if (a.size != 1) return WriteResult.TooLong
                 if (a[0] != GattContract.DEACTIVATE_CONFIRM.toByte()) return WriteResult.BadArgument
@@ -359,6 +375,64 @@ class SimulatedTerminal(
         WriteResult.Accepted
     }
 
+    /** COMMAND SCAN, checked like `oc_term_gatt_scan_command` ([a] is after the op byte). */
+    private fun scanCommand(a: ByteArray): WriteResult {
+        if (a.isEmpty()) return WriteResult.TooLong
+        when (a[0].toInt()) {
+            Command.SCAN_SET_USER -> {
+                if (a.size < 2) return WriteResult.TooLong
+                val count = a[1].toInt() and 0xFF
+                if (count > ScanList.MAX_USER) return WriteResult.BadArgument
+                if (a.size != 2 + 5 * count) return WriteResult.TooLong
+                val entries = (0 until count).map { i ->
+                    val at = 2 + 5 * i
+                    val hz = (0 until 4).fold(0L) { v, k -> v or ((a[at + k].toLong() and 0xFF) shl (8 * k)) }
+                    ScanEntry(hz, fixed = a[at + 4].toInt() and 1 != 0, sourceCode = ScanSource.USER.code, active = true)
+                }
+                if (entries.any { ChannelGrid.channelOf(it.freqHz) == null }) return WriteResult.BadArgument
+                userChannels.clear()
+                userChannels += entries
+            }
+            Command.SCAN_SET_FALLBACK -> {
+                if (a.size != 3) return WriteResult.TooLong
+                val after = a[1].toInt() and 0xFF
+                val chunk = a[2].toInt() and 0xFF
+                if (after > ScanList.NEVER || chunk !in 1..ChannelGrid.COUNT) return WriteResult.BadArgument
+                fallbackAfter = after
+                fallbackChunk = chunk
+            }
+            Command.SCAN_FORGET_LEARNED -> {
+                if (a.size != 1) return WriteResult.TooLong
+                learned.clear()
+            }
+            else -> return WriteResult.BadArgument
+        }
+        return WriteResult.Accepted
+    }
+
+    /** The assembled list, as `oc_term_scan_list`: last, user, learned, the six defaults; FIXED only in Part 97. */
+    private fun scanList(): ScanList {
+        val out = mutableListOf<ScanEntry>()
+        fun add(hz: Long, fixed: Boolean, source: ScanSource) {
+            val active = !fixed || mode == RegMode.PART97
+            if (active && out.any { it.active && it.freqHz == hz && it.fixed == fixed }) return
+            out += ScanEntry(hz, fixed, source.code, active)
+        }
+        lastServing?.let { add(it, false, ScanSource.LAST) }
+        userChannels.forEach { add(it.freqHz, it.fixed, ScanSource.USER) }
+        learned.forEach { add(it, false, ScanSource.LEARNED) }
+        (0 until 6).forEach { add(ChannelGrid.freqHz(it), false, ScanSource.DEFAULT) }
+        return ScanList(mode.code, fallbackAfter, fallbackChunk, netVer = 0, entries = out)
+    }
+
+    /** STATUS bytes 20-26: searching, the first active entry; on the cell, its anchor. */
+    private fun scanTail(): ScanTail {
+        if (radio != TerminalState.SEARCH) return ScanTail(0, 0, 0, ANCHOR_HZ / 1000)
+        val active = scanList().entries.filter { it.active }
+        val first = active.first()
+        return ScanTail(1, active.size, first.sourceCode, first.freqHz / 1000)
+    }
+
     private fun status() = TerminalStatus(
         stateCode = radio.code,
         bandCode = 0,
@@ -369,6 +443,7 @@ class SimulatedTerminal(
         frame = 1000L + frames,
         cellSeed = 0x5EED1234L,
         sigCode = sig.code,
+        scan = scanTail(),
     )
 
     /**
@@ -386,6 +461,10 @@ class SimulatedTerminal(
         }
         val changed = next != radio
         radio = next
+        if (changed && radio == TerminalState.GRANTED && lastServing != ANCHOR_HZ) {
+            lastServing?.let { learned.add(0, it) } // oc_term_scan_serving
+            lastServing = ANCHOR_HZ
+        }
         if (frames % 8 == 0) rssi = -52 + random.nextInt(-3, 4)
         if (changed && radio == TerminalState.GRANTED && sig == SigState.REGISTERING && pending == null) startRegistration()
         if (changed) sim.deliverStatus(status())
@@ -458,6 +537,11 @@ class SimulatedTerminal(
             return synchronized(lock) { if (closed) null else status().encode() }
         }
 
+        override suspend fun readScan(): ByteArray? {
+            delay(bleDelay)
+            return synchronized(lock) { if (closed) null else scanList().encode() }
+        }
+
         override fun close() {
             synchronized(lock) {
                 closed = true
@@ -479,5 +563,8 @@ class SimulatedTerminal(
 
         /** Calls to this number end "unreachable". */
         const val UNREACHABLE = "+883160655509999"
+
+        /** The simulated cell's anchor: 903.25 MHz (grid channel 2). */
+        val ANCHOR_HZ: Long = ChannelGrid.freqHz(2)
     }
 }
