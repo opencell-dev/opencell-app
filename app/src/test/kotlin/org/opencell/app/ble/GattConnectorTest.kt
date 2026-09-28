@@ -39,6 +39,7 @@ import org.opencell.core.link.PairingRules
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.Command
 import org.opencell.core.protocol.GattContract
+import org.opencell.core.protocol.Hex
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
@@ -423,7 +424,27 @@ class GattConnectorTest {
         assertTrue("$e", e is ConnectException)
     }
 
+    /** Contract v3 firmware has no SCAN: the connection still comes up, and reads no scan list. */
+    @Test
+    fun aTerminalWithoutScanConnectsAndReadsNoScanList() {
+        val (_, c) = connect()
+        assertEquals(null, runBlocking { c.readScan() })
+        c.close()
+    }
+
+    /** Contract v4: SCAN is read like STATUS (Android does the long read) and comes back as it is. */
+    @Test
+    fun aV4TerminalReadsItsScanList() {
+        scanValue = byteArrayOf(1, 1, 2, 13, 0, 0)
+        val (_, c) = connect()
+        assertEquals("01 01 02 0d 00 00", Hex.format(runBlocking { c.readScan() }!!))
+        c.close()
+    }
+
     private fun cccd() = BluetoothGattDescriptor(GattContract.CCCD, BluetoothGattDescriptor.PERMISSION_WRITE)
+
+    /** The SCAN characteristic's value (contract v4); null: a v3 terminal without SCAN. */
+    private var scanValue: ByteArray? = null
 
     private fun terminalService() = BluetoothGattService(GattContract.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
         val write = BluetoothGattCharacteristic.PROPERTY_WRITE
@@ -433,6 +454,11 @@ class GattConnectorTest {
         addCharacteristic(characteristic(GattContract.DOWN, notify))
         addCharacteristic(characteristic(GattContract.STATUS, notify))
         addCharacteristic(characteristic(GattContract.EVENT, notify))
+        scanValue?.let { v ->
+            // Robolectric answers readCharacteristic with the characteristic's own value.
+            @Suppress("DEPRECATION")
+            addCharacteristic(characteristic(GattContract.SCAN, BluetoothGattCharacteristic.PROPERTY_READ).apply { value = v })
+        }
     }
 
     private fun characteristic(uuid: java.util.UUID, properties: Int) =

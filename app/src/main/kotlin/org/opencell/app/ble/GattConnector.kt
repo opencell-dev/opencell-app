@@ -156,6 +156,10 @@ internal class GattConnection(
     private lateinit var status: BluetoothGattCharacteristic
     private lateinit var command: BluetoothGattCharacteristic
 
+    /** Contract v4's scan list; null on older firmware, which has no SCAN. */
+    @Volatile
+    private var scan: BluetoothGattCharacteristic? = null
+
     @Volatile
     override var mtu: Int = 23
         private set
@@ -321,6 +325,7 @@ internal class GattConnection(
         command = service.getCharacteristic(GattContract.COMMAND)
             ?: throw GattException("COMMAND characteristic missing (terminal firmware older than contract v2)")
         val event = service.getCharacteristic(GattContract.EVENT) ?: throw GattException("EVENT characteristic missing")
+        scan = service.getCharacteristic(GattContract.SCAN) // optional: firmware older than contract v4 has none
         enableNotifications(down)
         enableNotifications(status)
         enableNotifications(event)
@@ -382,6 +387,13 @@ internal class GattConnection(
 
     override suspend fun readStatus(): ByteArray? {
         val r = op(Kind.READ) { it.readCharacteristic(status) }
+        return if (r.status == BluetoothGatt.GATT_SUCCESS) r.value else null
+    }
+
+    /** Up to 141 bytes: Android does the long read (read blob) and hands back the whole value. */
+    override suspend fun readScan(): ByteArray? {
+        val c = scan ?: return null
+        val r = op(Kind.READ) { it.readCharacteristic(c) }
         return if (r.status == BluetoothGatt.GATT_SUCCESS) r.value else null
     }
 
