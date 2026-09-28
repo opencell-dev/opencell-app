@@ -356,6 +356,8 @@ class PhoneSession(
             Command.Reject -> "There is no incoming call to reject"
             Command.Hangup -> "There is no call to hang up"
             Command.Deactivate -> "The terminal can't deactivate during a call"
+            is Command.ScanSetUser, is Command.ScanSetFallback, Command.ScanForgetLearned ->
+                "The terminal can't change its scan list now" // never sent by the phone session
         }
         // A v2-firmware terminal refuses v3 DIAL/ACTIVATE arguments with this same ATT error and emits
         // no event on connect, so the app can't otherwise tell an old terminal from a bad argument.
