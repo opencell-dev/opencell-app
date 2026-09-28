@@ -77,7 +77,10 @@ data class SimTiming(
  * - EVENTs are dropped while no phone is connected, like the firmware's;
  * - it keeps a scan list (contract v4): its cell's anchor ([ANCHOR_HZ]) becomes the last
  *   serving entry once attached, COMMAND SCAN edits the user entries and fallback like
- *   `oc_term_gatt_scan_command`, and STATUS carries the scan tail.
+ *   `oc_term_gatt_scan_command` (refusing two user entries with the same frequency and FIXED
+ *   flag), and STATUS carries the scan tail. SCAN itself carries every stored entry, so a user
+ *   entry equal to the last serving cell is kept and shown twice; only the search walk that
+ *   drives the STATUS tail dedupes it away.
  *
  * Signalling state lives here, not in the connection, so a test can drop the
  * BLE link ([dropLink]) and reconnect to a terminal that carried on without it.
@@ -394,6 +397,8 @@ class SimulatedTerminal(
                     ScanEntry(hz, fixed = a[at + 4].toInt() and 1 != 0, sourceCode = ScanSource.USER.code, active = true)
                 }
                 if (entries.any { ChannelGrid.channelOf(it.freqHz) == null }) return WriteResult.BadArgument
+                // As oc_term_gatt_scan_command: two entries with the same frequency and FIXED flag are refused.
+                if (entries.distinctBy { it.freqHz to it.fixed }.size != entries.size) return WriteResult.BadArgument
                 userChannels.clear()
                 userChannels += entries
             }
@@ -414,12 +419,16 @@ class SimulatedTerminal(
         return WriteResult.Accepted
     }
 
-    /** The assembled list, as `oc_term_scan_list`: last, user, learned, the six defaults; FIXED only in Part 97. */
+    /**
+     * The assembled list, as `oc_term_scan_list`: last, user, learned, the six defaults; FIXED
+     * only in Part 97. Every entry is kept, even one that duplicates an earlier active entry
+     * (a user channel equal to the last serving cell, say): the SCAN characteristic carries the
+     * whole stored list, in priority order. Only the search walk ([walkEntries]) dedupes.
+     */
     private fun scanList(): ScanList {
         val out = mutableListOf<ScanEntry>()
         fun add(hz: Long, fixed: Boolean, source: ScanSource) {
             val active = !fixed || mode == RegMode.PART97
-            if (active && out.any { it.active && it.freqHz == hz && it.fixed == fixed }) return
             out += ScanEntry(hz, fixed, source.code, active)
         }
         lastServing?.let { add(it, false, ScanSource.LAST) }
@@ -429,12 +438,23 @@ class SimulatedTerminal(
         return ScanList(mode.code, fallbackAfter, fallbackChunk, netVer = 0, entries = out)
     }
 
-    /** STATUS bytes 20-26: searching, the first active entry; on the cell, its anchor. */
+    /** [scanList]'s active entries with a later duplicate (same frequency and FIXED flag) skipped: what the radio actually steps through. */
+    private fun walkEntries(): List<ScanEntry> {
+        val out = mutableListOf<ScanEntry>()
+        for (e in scanList().entries) {
+            if (!e.active) continue
+            if (out.any { it.freqHz == e.freqHz && it.fixed == e.fixed }) continue
+            out += e
+        }
+        return out
+    }
+
+    /** STATUS bytes 20-26: searching, the first entry of the walk (deduped); on the cell, its anchor. */
     private fun scanTail(): ScanTail {
         if (radio != TerminalState.SEARCH) return ScanTail(0, 0, 0, ANCHOR_HZ / 1000)
-        val active = scanList().entries.filter { it.active }
-        val first = active.first()
-        return ScanTail(1, active.size, first.sourceCode, first.freqHz / 1000)
+        val walk = walkEntries()
+        val first = walk.first()
+        return ScanTail(1, walk.size, first.sourceCode, first.freqHz / 1000)
     }
 
     private fun status() = TerminalStatus(
