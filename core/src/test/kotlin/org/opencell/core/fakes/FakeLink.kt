@@ -13,6 +13,7 @@ import org.opencell.core.link.LinkState
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.link.TerminalLink
 import org.opencell.core.link.WriteResult
+import org.opencell.core.protocol.ScanList
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.Duration
@@ -107,6 +108,15 @@ class FakeLink(
 
     fun emitDown(payload: ByteArray) {
         check(_downlink.tryEmit(Downlink(payload, timeSource.markNow(), 0L)))
+    }
+
+    /** What a SCAN read returns (null: no SCAN, as older firmware); [scanReads] counts the reads. */
+    var scanList: ScanList? = null
+    var scanReads = 0
+
+    override suspend fun refreshScan(): ScanList? {
+        scanReads++
+        return scanList
     }
 
     override suspend fun refreshStatus(): TerminalStatus? = when {

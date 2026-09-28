@@ -3,6 +3,7 @@ package org.opencell.core.link
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.opencell.core.protocol.GattContract
+import org.opencell.core.protocol.ScanList
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.ComparableTimeMark
@@ -43,6 +44,12 @@ interface TerminalLink {
 
     /** Reads STATUS now. Returns null when not connected or the read failed. */
     suspend fun refreshStatus(): TerminalStatus?
+
+    /**
+     * Reads the SCAN characteristic (the terminal's scan list, contract v4) now. Null when not
+     * connected, the read failed, or the firmware has no SCAN (older than contract v4).
+     */
+    suspend fun refreshScan(): ScanList? = null
 }
 
 /** One notification from the terminal, as it arrived: see [TerminalLink.inputs]. */
@@ -166,6 +173,9 @@ interface Connection {
     suspend fun write(payload: ByteArray): WriteResult
     suspend fun writeCommand(payload: ByteArray): WriteResult
     suspend fun readStatus(): ByteArray?
+
+    /** Reads SCAN. Null if the terminal has no SCAN characteristic (firmware older than contract v4) or the read failed. */
+    suspend fun readScan(): ByteArray? = null
 
     /** Tears the connection down. Idempotent; no [ConnectionEvents.onClosed] follows. */
     fun close()

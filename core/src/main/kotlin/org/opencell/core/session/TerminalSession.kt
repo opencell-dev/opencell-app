@@ -55,6 +55,9 @@ class TerminalSession(
     )
     private val runner = LoopbackRunner(link, sender, timeSource)
 
+    /** The terminal's scan list (channel list spec §9). */
+    val channels = ChannelSession(link, scope) { kind, text -> console.add(kind, text) }
+
     private val _loopback = MutableStateFlow<LoopbackReport?>(null)
 
     /** The running or last finished loopback test. */

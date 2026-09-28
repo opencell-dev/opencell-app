@@ -38,6 +38,22 @@ class LinkManagerTest {
         assertEquals(TerminalState.GRANTED, m.status.value?.state)
     }
 
+    /** Contract v4: SCAN is read on demand; firmware without it (and no link) reads as null. */
+    @Test
+    fun readsTheScanList() = runTest {
+        val scan = (Hex.parse("01 01 02 0d 00 01 d0 1f ac 36 14") as Hex.Parse.Ok).bytes
+        val connector = FakeConnector().apply { scanBytes = scan }
+        val m = manager(connector)
+        assertNull(m.refreshScan())
+        m.connect(target)
+        advanceTimeBy(101)
+        assertEquals(917_250_000L, m.refreshScan()?.entries?.single()?.freqHz)
+        connector.scanBytes = null
+        connector.connections.single().drop()
+        advanceTimeBy(1101)
+        assertNull(m.refreshScan())
+    }
+
     @Test
     fun reconnectsAfterTheLinkDrops() = runTest {
         val connector = FakeConnector()

@@ -23,6 +23,7 @@ class FakeConnector(private val connectTime: Duration = 100.milliseconds) : Conn
     var setupTime: Duration = Duration.ZERO
     var pairingProblem: PairingProblem? = null
     var statusBytes: ByteArray? = null
+    var scanBytes: ByteArray? = null
     val connections = mutableListOf<FakeConnection>()
     var attempts = 0
         private set
@@ -46,11 +47,15 @@ class FakeConnector(private val connectTime: Duration = 100.milliseconds) : Conn
             failNext--
             throw ConnectException("GATT error 133")
         }
-        return FakeConnection(events, statusBytes).also { connections += it }
+        return FakeConnection(events, statusBytes, scanBytes).also { connections += it }
     }
 }
 
-class FakeConnection(val events: ConnectionEvents, private val statusBytes: ByteArray?) : Connection {
+class FakeConnection(
+    val events: ConnectionEvents,
+    private val statusBytes: ByteArray?,
+    private val scanBytes: ByteArray? = null,
+) : Connection {
     override val mtu = 247
     var closed = false
         private set
@@ -73,6 +78,8 @@ class FakeConnection(val events: ConnectionEvents, private val statusBytes: Byte
     }
 
     override suspend fun readStatus(): ByteArray? = statusBytes
+
+    override suspend fun readScan(): ByteArray? = scanBytes
 
     override fun close() {
         closed = true
