@@ -3,7 +3,7 @@ package org.opencell.core.protocol
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** `lc_term_state_t`. */
+/** `oc_term_state_t`. */
 enum class TerminalState(val code: Int, val label: String, val description: String) {
     SEARCH(0, "Search", "Looking for a cell's sync beacon"),
     SYNCED(1, "Synced", "Tracking frame timing, waiting to attach"),
@@ -16,7 +16,7 @@ enum class TerminalState(val code: Int, val label: String, val description: Stri
     }
 }
 
-/** `lc_band_t`. */
+/** `oc_band_t`. */
 enum class Band(val code: Int, val label: String) {
     BAND_915(0, "915 MHz"),
     BAND_2G4(1, "2.4 GHz");
@@ -26,7 +26,7 @@ enum class Band(val code: Int, val label: String) {
     }
 }
 
-/** `lc_tier_t`: the link's modulation tier (near = fastest, edge = most robust). */
+/** `oc_tier_t`: the link's modulation tier (near = fastest, edge = most robust). */
 enum class Tier(val code: Int, val label: String) {
     NEAR(0, "Near"),
     MID(1, "Mid"),
@@ -38,7 +38,7 @@ enum class Tier(val code: Int, val label: String) {
 }
 
 /**
- * `lc_sig_state_t`, STATUS byte 3: what the terminal's signalling is doing.
+ * `oc_sig_state_t`, STATUS byte 3: what the terminal's signalling is doing.
  * The terminal runs activation, registration and calls; the app only shows this.
  */
 enum class SigState(val code: Int, val label: String) {
@@ -119,7 +119,7 @@ data class TerminalStatus(
             else -> "%.2f dB".format(snrDb)
         }
 
-    /** Packs this status exactly like `lc_term_pack_status()`. Used by the simulator and tests. */
+    /** Packs this status exactly like `oc_term_pack_status()`. Used by the simulator and tests. */
     fun encode(): ByteArray {
         val buf = ByteBuffer.allocate(GattContract.STATUS_LEN).order(ByteOrder.LITTLE_ENDIAN)
         buf.put(stateCode.toByte())

@@ -7,7 +7,7 @@ import org.junit.Test
 
 class ActivationQrTest {
     /**
-     * The golden v2 code of lc_sig's host test (host-tests/test_sig_msg.c on
+     * The golden v2 code of oc_sig's host test (host-tests/test_sig_msg.c on
      * branch numbers-v2, computed independently in Python): key id 1, PKn =
      * 1..32, token id a0..a7, secret b0..bf, +883160655501234, expiry 0x12345678.
      */

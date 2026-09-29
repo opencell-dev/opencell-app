@@ -29,7 +29,7 @@ sealed interface DialCheck {
  *
  * On the wire (EVENT, QR code) numbers are 8 BCD bytes, high nibble first,
  * then 0xF in every remaining nibble. This is a port of the terminal's
- * `lc_sig_number.c` (branch `numbers-v2`); the shared vectors in
+ * `oc_sig_number.c` (branch `numbers-v2`); the shared vectors in
  * `src/test/resources/numbers.txt` keep the two in step.
  */
 object PhoneNumber {
@@ -67,7 +67,7 @@ object PhoneNumber {
     /**
      * The full form of what a user dialled, completed from [home] (the
      * caller's own number, full form) for national forms; null if it isn't a
-     * number. A port of `lc_sig_number_normalize`.
+     * number. A port of `oc_sig_number_normalize`.
      */
     fun normalize(dialled: String, home: String?): String? = (check(dialled, home) as? DialCheck.Number)?.full
 
@@ -127,7 +127,7 @@ object PhoneNumber {
         return b
     }
 
-    /** `+` and the digits up to the first nibble that isn't 0-9, like `lc_sig_number_to_text`. */
+    /** `+` and the digits up to the first nibble that isn't 0-9, like `oc_sig_number_to_text`. */
     fun fromBcd(bytes: ByteArray, offset: Int = 0, length: Int = BCD_LEN): String {
         val sb = StringBuilder("+")
         for (i in 0 until minOf(2 * length, MAX_DIGITS)) {
@@ -139,7 +139,7 @@ object PhoneNumber {
         return sb.toString()
     }
 
-    /** True if the 8 bytes at [offset] are a canonical number: digits, then only 0xF (`lc_sig_number_valid`). */
+    /** True if the 8 bytes at [offset] are a canonical number: digits, then only 0xF (`oc_sig_number_valid`). */
     fun isValidBcd(bytes: ByteArray, offset: Int = 0): Boolean {
         val d = StringBuilder()
         var filler = false
@@ -157,7 +157,7 @@ object PhoneNumber {
 
     /**
      * For people: `+883-1-606-555-01234`, or `+883-44-2079460000` for a country
-     * without a national plan (`lc_sig_number_format`). Anything that isn't a
+     * without a national plan (`oc_sig_number_format`). Anything that isn't a
      * valid number is shown unchanged.
      */
     fun display(number: String): String {

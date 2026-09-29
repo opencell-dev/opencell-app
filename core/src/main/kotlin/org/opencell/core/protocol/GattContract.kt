@@ -5,8 +5,8 @@ import java.util.UUID
 /**
  * The terminal's BLE GATT contract v3 (v2 with numbering-v2 numbers: 8 BCD
  * bytes in EVENTs, any dialled form in DIAL), mirrored from
- * `firmware/components/lc_term/include/lc_term_gatt.h` and the constants in
- * `firmware/components/lc_sig/include/lc_sig.h` (branch `numbers-v2`).
+ * `firmware/components/oc_term/include/oc_term_gatt.h` and the constants in
+ * `firmware/components/oc_sig/include/oc_sig.h` (branch `numbers-v2`).
  *
  * Keep this file in sync with those headers: it is the only place the app
  * hard-codes UUIDs, sizes and ATT error codes.
@@ -33,25 +33,25 @@ object GattContract {
     /** Client Characteristic Configuration Descriptor (Bluetooth SIG). */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-    /** `LC_SIG_APP_MAX`: largest app data frame on UP and DOWN (contract v1 allowed 20). */
+    /** `OC_SIG_APP_MAX`: largest app data frame on UP and DOWN (contract v1 allowed 20). */
     const val MAX_PAYLOAD = 18
 
-    /** `LC_GATT_STATUS_LEN`. */
+    /** `OC_GATT_STATUS_LEN`. */
     const val STATUS_LEN = 20
 
-    /** `LC_GATT_STATUS_SIG`: the STATUS byte that holds the signalling state ([SigState]). */
+    /** `OC_GATT_STATUS_SIG`: the STATUS byte that holds the signalling state ([SigState]). */
     const val STATUS_SIG = 3
 
-    /** `LC_GATT_COMMAND_MAX`: op byte plus 120 bytes of QR text. */
+    /** `OC_GATT_COMMAND_MAX`: op byte plus 120 bytes of QR text. */
     const val COMMAND_MAX = 121
 
     /** Longest QR text ACTIVATE takes. */
     const val QR_TEXT_MAX = 120
 
-    /** `LC_SIG_DIAL_MAX`: longest DIAL argument. */
+    /** `OC_SIG_DIAL_MAX`: longest DIAL argument. */
     const val DIAL_MAX = 24
 
-    /** `LC_GATT_EVENT_MAX`. */
+    /** `OC_GATT_EVENT_MAX`. */
     const val EVENT_MAX = 16
 
     /** DEACTIVATE's confirmation byte. */
@@ -66,7 +66,7 @@ object GattContract {
     /** ATT 0x0D, invalid attribute value length: UP too long, or COMMAND of the wrong length. Never retry. */
     const val ATT_ERR_INVALID_LENGTH = 0x0D
 
-    /** ATT 0x81 (`LC_SIG_ATT_BAD_ARG`): a malformed COMMAND argument (QR text, number, confirmation byte). */
+    /** ATT 0x81 (`OC_SIG_ATT_BAD_ARG`): a malformed COMMAND argument (QR text, number, confirmation byte). */
     const val ATT_ERR_BAD_ARG = 0x81
 
     /**
@@ -85,6 +85,7 @@ object GattContract {
     /** The radio frame: one UP and one DOWN payload per frame at most. */
     const val FRAME_MILLIS = 120L
 
+    /** 6c63 is ASCII "lc", from the project's LoRaCell days: frozen, never renamed (terminals, bonded phones and their GATT caches know these UUIDs). */
     private fun uuid(id: Int): UUID =
         UUID.fromString("6c63%04x-7e2a-4b8e-9f2d-3c1a5e7b0d10".format(id))
 }

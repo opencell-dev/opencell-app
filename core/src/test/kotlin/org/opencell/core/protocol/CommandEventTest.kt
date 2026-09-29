@@ -6,7 +6,7 @@ import org.junit.Test
 
 /**
  * Golden bytes for COMMAND and EVENT (contract v3: 8-byte numbers), consistent
- * with lc_term_gatt.h, lc_sig.h (op and event codes), lc_sig_term.c (event
+ * with oc_term_gatt.h, oc_sig.h (op and event codes), oc_sig_term.c (event
  * layouts) and tools/ble/oc_ble.py on branch numbers-v2.
  */
 class CommandEventTest {

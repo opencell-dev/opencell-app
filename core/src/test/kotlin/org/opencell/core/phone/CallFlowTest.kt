@@ -307,7 +307,7 @@ class CallFlowTest {
         assertEquals(SigState.REGISTERED, b.state.sig)
     }
 
-    /** Like lc_sig_term.c: a HANGUP before CALL_SETUP has gone out just drops it, and the call ends at once (call id 0). */
+    /** Like oc_sig_term.c: a HANGUP before CALL_SETUP has gone out just drops it, and the call ends at once (call id 0). */
     @Test
     fun hangUpBeforeCallSetupIsSentEndsAtOnce() = runTest {
         val b = bench(activated = true)
@@ -321,7 +321,7 @@ class CallFlowTest {
         assertEquals(SigState.REGISTERED, b.sim.sigState)
     }
 
-    /** Like lc_sig_term.c: a HANGUP after CALL_SETUP but before CALL_PROC waits for the call id, then RELEASEs that call. */
+    /** Like oc_sig_term.c: a HANGUP after CALL_SETUP but before CALL_PROC waits for the call id, then RELEASEs that call. */
     @Test
     fun hangUpAfterCallSetupWaitsForTheCallIdThenReleases() = runTest {
         val b = bench(activated = true)

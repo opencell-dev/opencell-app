@@ -1,6 +1,6 @@
 package org.opencell.core.protocol
 
-/** CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR (`lc_crc16`). */
+/** CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR (`oc_crc16`). */
 object Crc16 {
     fun ccittFalse(data: ByteArray, length: Int = data.size): Int {
         var crc = 0xFFFF
@@ -22,7 +22,7 @@ sealed interface QrParse {
 /**
  * A one-time activation code, v2 (numbering-v2 spec §6.1): `opencell:2:` +
  * base64url (no padding) of a 75-byte blob. The app checks it exactly like the
- * terminal's `lc_sig_qr_parse` (prefix, length, alphabet, version, reserved
+ * terminal's `oc_sig_qr_parse` (prefix, length, alphabet, version, reserved
  * bytes, CRC, number) so it can show the number and expiry before sending
  * ACTIVATE, but it keeps no secrets: only [text] goes to the terminal, and the
  * token secret is never decoded into a field.
@@ -92,7 +92,7 @@ data class ActivationQr(
             )
         }
 
-        /** Builds the text `lcbench mkqr` prints. Used by the simulated terminal and by tests. */
+        /** Builds the text `ocbench mkqr` prints. Used by the simulated terminal and by tests. */
         fun format(
             keyId: Int,
             networkKey: ByteArray,

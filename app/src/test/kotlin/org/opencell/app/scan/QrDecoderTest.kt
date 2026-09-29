@@ -9,7 +9,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import kotlin.random.Random
 
-/** Plain JVM (no Robolectric): renders a QR code like `lcbench mkqr` prints and reads it back. */
+/** Plain JVM (no Robolectric): renders a QR code like `ocbench mkqr` prints and reads it back. */
 class QrDecoderTest {
     private val golden = "opencell:2:AgEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyCgoaKjpKWmp7CxsrO0tba3uLm6u7y9vr-" +
         "IMWBlVQEjT3hWNBIAAD44"

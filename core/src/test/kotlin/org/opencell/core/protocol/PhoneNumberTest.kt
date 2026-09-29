@@ -33,7 +33,7 @@ class PhoneNumberTest {
 
     @Test
     fun bcdMatchesTheFirmware() {
-        // Golden bytes from lc_sig host test test_golden_bytes (numbering v2).
+        // Golden bytes from oc_sig host test test_golden_bytes (numbering v2).
         assertEquals("88 31 60 65 55 01 23 4f", hex(PhoneNumber.toBcd("+883160655501234")))
         assertEquals("88 31 60 65 55 00 10 0f", hex(PhoneNumber.toBcd("+883160655500100")))
         assertEquals("88 34 42 07 94 60 00 0f", hex(PhoneNumber.toBcd("+883442079460000")))
@@ -55,7 +55,7 @@ class PhoneNumberTest {
 
     @Test
     fun bcdTextStopsAtTheFirstFillerNibble() {
-        // lc_sig_number_to_text stops at a nibble > 9; an all-filler number is just "+".
+        // oc_sig_number_to_text stops at a nibble > 9; an all-filler number is just "+".
         assertEquals("+883", PhoneNumber.fromBcd(bytes("88 3f 12 34 56 78 9f ff")))
         assertEquals("+", PhoneNumber.fromBcd(ByteArray(8) { 0xFF.toByte() }))
         assertEquals("+8836065551234", PhoneNumber.fromBcd(bytes("88 36 06 55 51 23 4f"), 0, PhoneNumber.OLD_BCD_LEN))

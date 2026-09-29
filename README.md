@@ -12,7 +12,7 @@ interface and holds no secrets. The app:
 - offers a data-frame test in a connected call (voice is not in this step);
 - keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test.
 
-The BLE contract (v3) is `firmware/components/lc_term/include/lc_term_gatt.h`.
+The BLE contract (v3) is `firmware/components/oc_term/include/oc_term_gatt.h`.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
 A terminal still on v2-numbering firmware refuses v3 DIAL/ACTIVATE arguments and sends
 v2-length EVENTs; the app can't tell that from a genuinely bad argument or number, so it
@@ -112,7 +112,7 @@ also do all of the following:
 ### Activate (Phone tab)
 
 1. Get a code: from the portal, or on the bench
-   `lcbench mkqr --number +883-1-606-555-01234` (it prints the QR code and the
+   `ocbench mkqr --number +883-1-606-555-01234` (it prints the QR code and the
    `opencell:2:…` text). A code from before numbering v2 (`opencell:1:…`) is
    refused: ask for a new one.
 2. **Scan QR code**, or paste the text and tap **Check code**. The app checks the
@@ -181,7 +181,7 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
     same command again while one is still in flight (a double-tap on Answer,
     say) is ignored, not queued.
 - **Loopback**: the bench loopback test (a cell that echoes each UL frame on DL).
-  It needs a grant: outside a call that means a test cell (`lcbench cell`) that
+  It needs a grant: outside a call that means a test cell (`ocbench cell`) that
   keeps the terminal granted. The defaults are 20 probes, one every 1000 ms,
   payload `HELLO` with a sequence tag (`HELLO#00`, …). The summary shows sent,
   echoed, lost, refused, stray DOWNs, and latency.

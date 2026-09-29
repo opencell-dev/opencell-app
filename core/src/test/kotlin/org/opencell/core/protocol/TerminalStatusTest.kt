@@ -107,7 +107,7 @@ class TerminalStatusTest {
         assertEquals(t, TerminalStatus.decode(t.encode()))
     }
 
-    /** Contract v2: byte 3 is lc_sig_state_t, 0 (not activated) to 8 (releasing). */
+    /** Contract v2: byte 3 is oc_sig_state_t, 0 (not activated) to 8 (releasing). */
     @Test
     fun byteThreeIsTheSignallingState() {
         assertEquals(SigState.NOT_ACTIVATED, TerminalStatus.decode(bench).sig)

@@ -39,7 +39,7 @@ data class SimTiming(
     val setup: Duration = 400.milliseconds,
     /** DIAL to CALL_SETUP going out on the air (the next UL frame); a HANGUP before this just drops it. Less than [setup]. */
     val setupSent: Duration = 120.milliseconds,
-    /** The simulated peer answers after ringing this long, like `lcbench net`'s peer (3 s). */
+    /** The simulated peer answers after ringing this long, like `ocbench net`'s peer (3 s). */
     val peerAnswers: Duration = 3.seconds,
     /** ANSWER to CONNECTED. */
     val answer: Duration = 300.milliseconds,
@@ -53,13 +53,13 @@ data class SimTiming(
 /**
  * A software terminal plus network, for trying the app without hardware
  * ("Demo terminal") and for tests. As far as the phone can tell it behaves like
- * the firmware (contract v3, numbering v2) against `lcbench net`:
+ * the firmware (contract v3, numbering v2) against `ocbench net`:
  * - the radio walks SEARCH -> SYNCED -> ATTACHING -> GRANTED over ~2 s of frames
  *   and then stays granted;
  * - UP takes app data frames into a 4-deep queue (0x80 when full or not granted,
  *   0x0D over 18 bytes), sends one per 120 ms frame, and the cell or the call's
  *   peer echoes each on DOWN after [echoDelay];
- * - COMMANDs are checked like `lc_sig_term_command` (0x0D length, 0x81 argument,
+ * - COMMANDs are checked like `oc_sig_term_command` (0x0D length, 0x81 argument,
  *   0x80 state), and EVENTs and STATUS byte 3 follow like the firmware's;
  * - STATUS is notified only with an EVENT or a radio state change, like the
  *   firmware (term_app.c): not on DIAL, ANSWER, HANGUP, REJECT, ACTIVATE or a
@@ -67,7 +67,7 @@ data class SimTiming(
  * - activation accepts any valid code whose token wasn't used here and hasn't
  *   expired; outgoing calls ring and are answered after [SimTiming.peerAnswers];
  *   DIAL takes any dialled form and completes it from the terminal's own
- *   number (`lc_sig_number_normalize`); dialling your own number is busy,
+ *   number (`oc_sig_number_normalize`); dialling your own number is busy,
  *   [UNREACHABLE] is unreachable;
  * - EVENTs are dropped while no phone is connected, like the firmware's.
  *
@@ -138,7 +138,7 @@ class SimulatedTerminal(
         return sim
     }
 
-    /** A fresh one-time code for the demo, like `lcbench mkqr --number`. Each call makes a new token. */
+    /** A fresh one-time code for the demo, like `ocbench mkqr --number`. Each call makes a new token. */
     fun demoQrText(number: String = DEMO_NUMBER, validFor: Duration = 24.hours): String = synchronized(lock) {
         ActivationQr.format(
             keyId = 1,
@@ -158,7 +158,7 @@ class SimulatedTerminal(
         sig = SigState.RINGING_IN
         emit(TerminalEvent.Incoming(callId, caller))
         later(timing.ringTimeout) {
-            // Like the firmware (lc_sig_term.c): an unanswered incoming call goes
+            // Like the firmware (oc_sig_term.c): an unanswered incoming call goes
             // RINGING_IN -> RELEASING (no EVENT, so no STATUS notification either) and
             // only ends once the release completes, same as a local HANGUP/REJECT.
             sig = SigState.RELEASING
@@ -263,7 +263,7 @@ class SimulatedTerminal(
     private fun callProceeding(called: String) {
         callId = nextCallId++
         if (hangupPending) {
-            // As lc_sig_term.c: the HANGUP that came before the call id is sent as RELEASE now.
+            // As oc_sig_term.c: the HANGUP that came before the call id is sent as RELEASE now.
             hangupPending = false
             later(timing.release) { end(EndCause.NORMAL) }
             return
@@ -301,7 +301,7 @@ class SimulatedTerminal(
         val a = p.copyOfRange(1, p.size)
         when (p[0].toInt() and 0xFF) {
             Command.ACTIVATE -> {
-                // As term_ble.c: length and code first (lc_sig_term_act_prepare), then state.
+                // As term_ble.c: length and code first (oc_sig_term_act_prepare), then state.
                 if (a.isEmpty() || a.size > GattContract.QR_TEXT_MAX) return WriteResult.TooLong
                 val qr = (ActivationQr.parse(a.decodeToString()) as? QrParse.Ok)?.qr ?: return WriteResult.BadArgument
                 if (sig == SigState.ACTIVATING || sig.hasCall) return WriteResult.NotNow
@@ -331,7 +331,7 @@ class SimulatedTerminal(
                 if (!ok) return WriteResult.NotNow
                 val cause = if (ringingIn) EndCause.REJECTED else EndCause.NORMAL
                 if (sig == SigState.CALLING && callId == 0L) {
-                    // As lc_sig_term.c: before CALL_PROC there's no call id to RELEASE.
+                    // As oc_sig_term.c: before CALL_PROC there's no call id to RELEASE.
                     if (!setupSent) {
                         end(EndCause.NORMAL) // CALL_SETUP never went out: drop it and end at once
                         return WriteResult.Accepted
@@ -474,7 +474,7 @@ class SimulatedTerminal(
         /** The number the demo code activates. */
         const val DEMO_NUMBER = "+883160655501234"
 
-        /** A peer that answers, like `lcbench net`'s simulated peer: the echo service, 00100. */
+        /** A peer that answers, like `ocbench net`'s simulated peer: the echo service, 00100. */
         const val PEER = "+883160655500100"
 
         /** Calls to this number end "unreachable". */

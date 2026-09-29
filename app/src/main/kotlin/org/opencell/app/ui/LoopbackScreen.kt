@@ -124,7 +124,7 @@ private fun LoopbackForm(vm: MainViewModel, running: Boolean, connected: Boolean
                 Text("First probe: \"${probe.decodeToString()}\" (${probe.size} B)", style = MonoStyle)
                 Text(
                     "Needs the terminal in GRANTED (UP is refused with 0x80 without a grant). " +
-                        "Outside a call that means a test cell (lcbench cell) that keeps it granted.",
+                        "Outside a call that means a test cell (ocbench cell) that keeps it granted.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
