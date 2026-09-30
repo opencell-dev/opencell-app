@@ -5,6 +5,8 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -56,5 +58,24 @@ class AndroidAudioTest {
         val mic = checkNotNull(audio.openMic())
         assertEquals(false, mic.read(ShortArray(960)))
         mic.close()
+    }
+
+    @Test
+    fun theSpeakerWritesWholeBlocks() = runTest {
+        val bytes = ByteArray(AndroidAudio.BLOCK_BYTES)
+        var written = 0
+        writeBlock(bytes) { _, off, len -> minOf(len, 500).also { assertEquals(written, off); written += it } }
+        assertEquals(AndroidAudio.BLOCK_BYTES, written)
+        assertEquals(0L, currentTime)
+    }
+
+    @Test
+    fun aDeadSpeakerStillTakesABlocksTime() = runTest {
+        // AudioTrack.write returns ERROR_DEAD_OBJECT (-6) after the audio server restarts: the
+        // playout loop must keep its 120 ms clock instead of spinning.
+        var calls = 0
+        writeBlock(ByteArray(AndroidAudio.BLOCK_BYTES)) { _, _, _ -> calls++; -6 }
+        assertEquals(1, calls)
+        assertEquals(120L, currentTime)
     }
 }

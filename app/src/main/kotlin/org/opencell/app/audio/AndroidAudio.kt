@@ -12,6 +12,7 @@ import android.os.Process
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.opencell.core.voice.AudioIo
 import org.opencell.core.voice.BlockCodec
@@ -106,12 +107,7 @@ class AndroidAudio(private val context: Context, private val route: CallAudioRou
                     bytes[2 * i] = block[i].toByte()
                     bytes[2 * i + 1] = (block[i].toInt() shr 8).toByte()
                 }
-                var off = 0
-                while (off < bytes.size) {
-                    val n = track.write(bytes, off, bytes.size - off, AudioTrack.WRITE_BLOCKING)
-                    if (n <= 0) break
-                    off += n
-                }
+                writeBlock(bytes) { b, off, len -> track.write(b, off, len, AudioTrack.WRITE_BLOCKING) }
             }
 
             @Synchronized
@@ -143,5 +139,23 @@ class AndroidAudio(private val context: Context, private val route: CallAudioRou
                 r.run()
             }, name).apply { isDaemon = true }
         }.asCoroutineDispatcher()
+    }
+}
+
+/**
+ * Writes one whole block to [write] (partial writes are looped). An output that
+ * refuses it (AudioTrack's ERROR_DEAD_OBJECT after an audio server restart, say)
+ * still takes a block's time, so the playout loop keeps its 120 ms clock instead
+ * of spinning for the rest of the call.
+ */
+internal suspend fun writeBlock(bytes: ByteArray, write: (ByteArray, Int, Int) -> Int) {
+    var off = 0
+    while (off < bytes.size) {
+        val n = write(bytes, off, bytes.size - off)
+        if (n <= 0) {
+            delay(BlockCodec.BLOCK_MILLIS)
+            return
+        }
+        off += n
     }
 }
