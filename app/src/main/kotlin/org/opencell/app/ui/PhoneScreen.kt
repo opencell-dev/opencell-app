@@ -245,7 +245,7 @@ private fun ActivationResult(vm: MainViewModel, phone: PhoneState) {
 private fun Onboarding(vm: MainViewModel, again: Boolean) {
     Text(if (again) "Activate with a new code" else "Activate your terminal", style = MaterialTheme.typography.headlineSmall)
     Text(
-        "Scan the one-time activation code from the OpenCell portal (on the bench: ocbench mkqr), or paste its text. " +
+        "Scan the one-time activation code from the OpenCell portal (on the bench: oc-core admin sub issue), or paste its text. " +
             "The terminal agrees its keys with the network; the phone keeps no secrets.",
         style = MaterialTheme.typography.bodyMedium,
     )

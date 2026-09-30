@@ -121,9 +121,9 @@ also do all of the following:
 ### Activate (Phone tab)
 
 1. Get a code: from the portal, or on the bench
-   `ocbench mkqr --number +883-1-606-555-01234` (it prints the QR code and the
-   `opencell:2:…` text). A code from before numbering v2 (`opencell:1:…`) is
-   refused: ask for a new one.
+   `oc-core admin sub issue +883-1-606-555-01234` (it prints the
+   `opencell:2:…` text, and the QR code if `qrencode` is installed). A code
+   from before numbering v2 (`opencell:1:…`) is refused: ask for a new one.
 2. **Scan QR code**, or paste the text and tap **Check code**. The app checks the
    code exactly like the terminal (prefix, length, base64url, version, reserved
    bytes, CRC, number) and shows its number and expiry before sending anything.
