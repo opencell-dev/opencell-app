@@ -38,6 +38,8 @@ data class Call(
     val answering: Boolean = false,
     /** Wall-clock millis of CONNECTED, for the call display. */
     val connectedAt: Long? = null,
+    /** CONNECTED's voice codec id ([org.opencell.core.voice.CodecId]); null when the app learned of the call from STATUS alone. */
+    val codec: Int? = null,
 ) {
     val cause: EndCause? get() = causeCode?.let { EndCause.fromCode(it) }
 
@@ -261,8 +263,8 @@ object PhoneReducer {
             val c = s.activeCall
             s.copy(
                 sig = SigState.IN_CALL,
-                call = c?.copy(id = e.callId, phase = CallPhase.CONNECTED, answering = false, connectedAt = wallNow)
-                    ?: Call(e.callId, null, null, CallPhase.CONNECTED, connectedAt = wallNow),
+                call = c?.copy(id = e.callId, phase = CallPhase.CONNECTED, answering = false, connectedAt = wallNow, codec = e.codec)
+                    ?: Call(e.callId, null, null, CallPhase.CONNECTED, connectedAt = wallNow, codec = e.codec),
                 callChangedAt = now,
             )
         }
