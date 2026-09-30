@@ -2,7 +2,8 @@
 # Vendors the Codec2 speech codec (drowe67/codec2, LGPL-2.1) into
 # codec2/src/main/cpp/codec2 at a pinned commit: only the vocoder (no FreeDV
 # modems), its headers, the codebooks generated from their text sources, a
-# version.h, the licence and a note saying what was taken. Run from anywhere;
+# version.h, the licence and a note saying what was taken; and the licence
+# with a notice into the APK's assets (licenses/codec2). Run from anywhere;
 # needs git, a host C compiler and network access. Re-running it reproduces
 # the same files, so a diff after a run means upstream or this script changed.
 set -euo pipefail
@@ -66,4 +67,22 @@ done | tr ' \\' '\n\n' | grep "^$WORK/src/.*\.h$" | sort -u | while read -r h; d
   echo "Files:"
   (cd "$DEST" && find . -type f ! -name README.opencell | sort | sed 's|^\./|  |')
 } > "$DEST/README.opencell"
+# The licence and a notice inside the APK, next to libcodec2.so (LGPL 2.1 section 6).
+NOTICES=$ROOT/codec2/src/main/assets/licenses/codec2
+rm -rf "$NOTICES"
+mkdir -p "$NOTICES"
+cp "$WORK/COPYING" "$NOTICES/COPYING"
+{
+  echo "Codec 2 (the speech codec OpenCell uses in calls)"
+  echo
+  echo "Copyright David Rowe and the Codec 2 contributors."
+  echo "Licensed under the GNU Lesser General Public License version 2.1 (LGPL 2.1):"
+  echo "the full text is in COPYING, next to this file."
+  echo
+  echo "OpenCell uses it unmodified, built as its own shared library, libcodec2.so,"
+  echo "which you may replace with a compatible build (LGPL 2.1 section 6(b))."
+  echo "Source: https://github.com/drowe67/codec2 at commit $COMMIT;"
+  echo "the exact files built are in the OpenCell app's source, codec2/src/main/cpp/codec2."
+} > "$NOTICES/NOTICE"
+
 echo "vendored $(find "$DEST" -type f | wc -l) files into $DEST"

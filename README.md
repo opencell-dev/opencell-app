@@ -303,3 +303,5 @@ contributors, licensed under the GNU Lesser General Public License, version 2.1
 `codec2/src/main/cpp/codec2` exactly as `tools/codec2/vendor.sh` takes it from
 upstream commit `310777b1c6f1af0bc7c72f5b32f80f6fd9136962`; it is built as its
 own shared library, `libcodec2.so`, which can be replaced with a modified build.
+Every APK carries the licence and a notice in its assets (`licenses/codec2/COPYING`,
+`licenses/codec2/NOTICE`, written by the same script).

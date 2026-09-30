@@ -13,6 +13,10 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "0.2.0"
+        // Only the ABIs :codec2 builds (the phones and the emulator). AndroidX/CameraX also
+        // ship 32-bit libraries; without this a 32-bit device would install the app and then
+        // have no codec at the first call.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     buildTypes {

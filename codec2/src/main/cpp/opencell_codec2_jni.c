@@ -42,10 +42,12 @@ Java_org_opencell_codec2_Codec2Native_encode(JNIEnv *env, jclass cls, jlong h, j
     (void)cls;
     if (h == 0) return;
     jshort *in = (*env)->GetShortArrayElements(env, pcm, NULL);
-    jbyte *out = (*env)->GetByteArrayElements(env, bits, NULL);
-    codec2_encode(c2(h), (unsigned char *)out, (short *)in);
-    (*env)->ReleaseByteArrayElements(env, bits, out, 0);
-    (*env)->ReleaseShortArrayElements(env, pcm, in, JNI_ABORT);
+    jbyte *out = in != NULL ? (*env)->GetByteArrayElements(env, bits, NULL) : NULL;
+    if (out != NULL) { /* NULL: out of memory, with OutOfMemoryError pending for the caller */
+        codec2_encode(c2(h), (unsigned char *)out, (short *)in);
+        (*env)->ReleaseByteArrayElements(env, bits, out, 0);
+    }
+    if (in != NULL) (*env)->ReleaseShortArrayElements(env, pcm, in, JNI_ABORT);
 }
 
 JNIEXPORT void JNICALL
@@ -54,8 +56,10 @@ Java_org_opencell_codec2_Codec2Native_decode(JNIEnv *env, jclass cls, jlong h, j
     (void)cls;
     if (h == 0) return;
     jbyte *in = (*env)->GetByteArrayElements(env, bits, NULL);
-    jshort *out = (*env)->GetShortArrayElements(env, pcm, NULL);
-    codec2_decode(c2(h), (short *)out, (const unsigned char *)in);
-    (*env)->ReleaseShortArrayElements(env, pcm, out, 0);
-    (*env)->ReleaseByteArrayElements(env, bits, in, JNI_ABORT);
+    jshort *out = in != NULL ? (*env)->GetShortArrayElements(env, pcm, NULL) : NULL;
+    if (out != NULL) { /* NULL: out of memory, with OutOfMemoryError pending for the caller */
+        codec2_decode(c2(h), (short *)out, (const unsigned char *)in);
+        (*env)->ReleaseShortArrayElements(env, pcm, out, 0);
+    }
+    if (in != NULL) (*env)->ReleaseByteArrayElements(env, bits, in, JNI_ABORT);
 }
