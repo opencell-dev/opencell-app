@@ -1,6 +1,7 @@
 package org.opencell.core.voice
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
@@ -20,6 +21,12 @@ import org.opencell.core.link.TerminalLink
 import org.opencell.core.link.WriteResult
 import org.opencell.core.phone.CallPhase
 import org.opencell.core.phone.PhoneState
+import java.util.logging.Level
+import java.util.logging.Logger
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.ComparableTimeMark
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /** Counters of the current call's voice, for the call screen and the bench. */
@@ -57,7 +64,14 @@ sealed interface VoiceState {
         val mic: Boolean = false,
         val output: Boolean = false,
         val stats: VoiceStats = VoiceStats(),
+        /** The microphone failed mid-call (the audio server restarted, say); it is being reopened. */
+        val micFailed: Boolean = false,
+        /** The audio output failed mid-call; it is being rebuilt. */
+        val outputFailed: Boolean = false,
     ) : VoiceState
+
+    /** Voice stopped for the rest of this call because something threw ([reason]); the call goes on. */
+    data class Failed(val reason: String) : VoiceState
 }
 
 /**
@@ -71,7 +85,14 @@ sealed interface VoiceState {
  *   when the next is ready is dropped too, so a slow BLE write never turns into
  *   delay. Muted, or without a microphone ([micAllowed] false, or it failed to
  *   open), encoded silence goes out every 120 ms instead, so the far end keeps
- *   a steady stream.
+ *   a steady stream. After a microphone stall only the newest buffered block
+ *   goes out (voice spec §11 R-a).
+ * - **Device failures.** A microphone or output that worked and then failed
+ *   (the audio server restarted, say) is reopened after 1 s, 2 s, then every
+ *   4 s; [VoiceState.On.micFailed] and [VoiceState.On.outputFailed] say so.
+ *   Anything that throws ends voice as [VoiceState.Failed], never the app or
+ *   the call. The output opens before the microphone: it begins the call's
+ *   audio mode and route.
  * - **Downlink.** Payloads of the codec's size go into a [JitterBuffer]; the
  *   audio output's clock takes one block every 120 ms and plays it, conceals a
  *   missing one, or plays silence.
@@ -122,23 +143,46 @@ class VoiceSession(
     }
 
     private fun start(codec: Int) {
-        val enc = codecs.create(codec)
-        val dec = codecs.create(codec)
-        if (enc == null || dec == null) {
+        var enc: VoiceCodec? = null
+        var dec: VoiceCodec? = null
+        val up: BlockCodec
+        val down: BlockCodec
+        try {
+            enc = codecs.create(codec)
+            dec = codecs.create(codec)
+            if (enc == null || dec == null) {
+                enc?.close()
+                dec?.close()
+                _state.value = VoiceState.Unsupported(codec)
+                return
+            }
+            up = BlockCodec(enc)
+            down = BlockCodec(dec)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) { // a codec library that won't load (UnsatisfiedLinkError), a codec that won't start
             enc?.close()
             dec?.close()
-            _state.value = VoiceState.Unsupported(codec)
+            fail(e)
             return
         }
         muted = false
         _state.value = VoiceState.On(codec)
-        val up = BlockCodec(enc)
-        val down = BlockCodec(dec)
         val jitter = JitterBuffer(jitterTarget)
         job = scope.launch {
-            launch { uplink(up) }
-            launch { downlink(down, jitter) }
-            launch { playout(down, jitter) }
+            try {
+                coroutineScope {
+                    // The output first: opening it begins the call's audio mode and route, which
+                    // some phones need before capture starts to pick the microphone and echo canceller.
+                    launch(start = CoroutineStart.UNDISPATCHED) { playout(down, jitter) }
+                    launch { uplink(up) }
+                    launch { downlink(down, jitter) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) { // anything thrown in voice ends voice, never the app or the call
+                fail(e)
+            }
         }.also {
             it.invokeOnCompletion {
                 enc.close()
@@ -147,17 +191,38 @@ class VoiceSession(
         }
     }
 
+    private fun fail(e: Throwable) {
+        log.log(Level.WARNING, "voice stopped", e)
+        _state.value = VoiceState.Failed(e.message ?: e.javaClass.simpleName)
+    }
+
     private fun on(change: (VoiceState.On) -> VoiceState.On) {
         _state.update { if (it is VoiceState.On) change(it) else it }
     }
 
     private fun stats(change: (VoiceStats) -> VoiceStats) = on { it.copy(stats = change(it.stats)) }
 
+    private fun late() = stats { it.copy(late = it.late + 1) }
+
+    /** One encoded block; [afterStall]: the microphone had stalled before it, and may hand over a backlog. */
+    private class Block(val payload: ByteArray, val afterStall: Boolean)
+
     private suspend fun uplink(codec: BlockCodec) = coroutineScope {
-        val out = Channel<ByteArray>(1, BufferOverflow.DROP_OLDEST) { stats { s -> s.copy(late = s.late + 1) } }
+        val out = Channel<Block>(1, BufferOverflow.DROP_OLDEST) { late() }
         launch {
-            for (payload in out) {
-                val r = link.writeUp(payload)
+            for (first in out) {
+                var block = first
+                if (block.afterStall) {
+                    // After a stall the microphone hands over what it buffered, back to back.
+                    // Send only the newest: every extra block would sit in the terminal's
+                    // uplink queue as lasting delay (voice spec §11 R-a).
+                    delay(BlockCodec.BLOCK_MILLIS / 2)
+                    out.tryReceive().getOrNull()?.let { newer ->
+                        late()
+                        block = newer
+                    }
+                }
+                val r = link.writeUp(block.payload)
                 stats {
                     when (r) {
                         WriteResult.Accepted -> it.copy(sent = it.sent + 1)
@@ -169,26 +234,40 @@ class VoiceSession(
         }
         val pcm = ShortArray(codec.blockSamples)
         var mic: MicInput? = null
-        var tried = false // opening failed while allowed: try again only after micAllowed goes false and back
+        var tried = false // opening was refused while allowed: try again only after micAllowed goes false and back
+        val retry = Backoff() // the microphone worked and then failed: reopen it, less and less often
+        var lastRead: ComparableTimeMark? = null
         try {
             while (isActive) {
                 if (!micAllowed.value) {
                     tried = false
+                    retry.clear()
                     mic?.close()
                     mic = null
-                } else if (mic == null && !tried) {
+                } else if (mic == null && (if (retry.pending) retry.due() else !tried)) {
                     tried = true
                     mic = audio.openMic()
+                    lastRead = null
+                    if (mic != null) retry.clear() else if (retry.pending) retry.again()
                 }
-                on { it.copy(mic = mic != null) }
+                on { it.copy(mic = mic != null, micFailed = retry.pending) }
                 val heard = mic?.read(pcm) ?: false
-                if (!heard) {
-                    mic?.close()
-                    mic = null
+                var stalled = false
+                if (heard) {
+                    val now = timeSource.markNow()
+                    stalled = lastRead?.let { now - it >= STALL } ?: false
+                    lastRead = now
+                } else {
+                    if (mic != null) { // it worked and stopped: the device failed (the audio server restarted, say)
+                        mic.close()
+                        mic = null
+                        retry.start()
+                        on { it.copy(mic = false, micFailed = true) }
+                    }
                     delay(BlockCodec.BLOCK_MILLIS)
                 }
                 if (!heard || muted) pcm.fill(0)
-                out.send(codec.encode(pcm))
+                out.send(Block(codec.encode(pcm), stalled))
             }
         } finally {
             mic?.close()
@@ -209,24 +288,73 @@ class VoiceSession(
     }
 
     private suspend fun playout(codec: BlockCodec, jitter: JitterBuffer) {
-        val speaker = audio.openSpeaker()
-        on { it.copy(output = speaker != null) }
+        var speaker: SpeakerOutput? = null
+        val retry = Backoff() // the output worked and then failed: rebuild it, less and less often
         try {
+            speaker = audio.openSpeaker()
+            on { it.copy(output = speaker != null) }
             while (currentCoroutineContext().isActive) {
+                if (speaker == null && retry.pending && retry.due()) {
+                    speaker = audio.openSpeaker()
+                    if (speaker != null) retry.clear() else retry.again()
+                    on { it.copy(output = speaker != null, outputFailed = retry.pending) }
+                }
                 val pcm = when (val p = jitter.poll()) {
                     is Playout.Play -> codec.decode(p.payload)
                     is Playout.Conceal -> codec.decode(p.payload).also { scale(it, p.gain) }
                     Playout.Silence -> ShortArray(codec.blockSamples)
                 }
                 stats { it.copy(jitter = jitter.counts()) }
-                if (speaker != null) speaker.write(pcm) else delay(BlockCodec.BLOCK_MILLIS)
+                val out = speaker
+                if (out == null) {
+                    delay(BlockCodec.BLOCK_MILLIS)
+                } else if (!out.write(pcm)) {
+                    out.close()
+                    speaker = null
+                    retry.start()
+                    on { it.copy(output = false, outputFailed = true) }
+                }
             }
         } finally {
             speaker?.close()
         }
     }
 
+    /** When to try a failed audio device again: after 1 s, then 2 s, then every 4 s. */
+    private inner class Backoff {
+        private var at: ComparableTimeMark? = null
+        private var wait = RETRY_FIRST
+
+        val pending: Boolean get() = at != null
+
+        fun due(): Boolean = at?.hasPassedNow() ?: false
+
+        fun start() {
+            wait = RETRY_FIRST
+            at = timeSource.markNow() + wait
+        }
+
+        fun again() {
+            wait = minOf(wait * 2, RETRY_MAX)
+            at = timeSource.markNow() + wait
+        }
+
+        fun clear() {
+            at = null
+            wait = RETRY_FIRST
+        }
+    }
+
     private fun scale(pcm: ShortArray, gain: Float) {
         for (i in pcm.indices) pcm[i] = (pcm[i] * gain).toInt().toShort()
+    }
+
+    private companion object {
+        val log: Logger = Logger.getLogger(VoiceSession::class.java.name)
+        val RETRY_FIRST = 1.seconds
+        val RETRY_MAX = 4.seconds
+
+        /** A microphone read this much later than the one before means the device stalled. */
+        val STALL = (BlockCodec.BLOCK_MILLIS * 3 / 2).milliseconds
     }
 }

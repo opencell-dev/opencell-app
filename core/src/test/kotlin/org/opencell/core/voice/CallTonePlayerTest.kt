@@ -110,6 +110,21 @@ class CallTonePlayerTest {
     }
 
     @Test
+    fun aToneOutputThatThrowsDoesNotCrashAndTheNextToneStillPlays() = runTest {
+        val phone = MutableStateFlow(idle)
+        val audio = FakeAudio().apply { failWith = IllegalStateException("AudioTrack refused") }
+        val p = CallTonePlayer(phone, MutableStateFlow(TonePlans.NORTH_AMERICA), audio, backgroundScope)
+        runCurrent()
+        phone.value = state(CallPhase.RINGING)
+        runCurrent()
+        assertNull(p.playing.value)
+        audio.failWith = null
+        phone.value = state(CallPhase.ENDED, cause = EndCause.BUSY.code, at = 2)
+        runCurrent()
+        assertEquals(CallTone.BUSY, p.playing.value)
+    }
+
+    @Test
     fun busyPlaysSixSecondsThenStops() = runTest {
         val (phone, audio, p) = player()
         phone.value = state(CallPhase.ENDED, cause = EndCause.BUSY.code)

@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -177,6 +178,10 @@ private fun VoiceControls(audio: CallAudio) {
                     "The network chose ${CodecId.label(v.codec)}, which this app can't play: no audio in this call.",
                     color = MaterialTheme.colorScheme.error,
                 )
+                is VoiceState.Failed -> Text(
+                    "Audio stopped (${v.reason}): no audio for the rest of this call. The call itself goes on.",
+                    color = MaterialTheme.colorScheme.error,
+                )
                 is VoiceState.On -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         if (v.muted) {
@@ -190,20 +195,11 @@ private fun VoiceControls(audio: CallAudio) {
                             OutlinedButton(onClick = { audio.route.setSpeaker(true) }) { Text("Speaker") }
                         }
                     }
-                    when {
-                        !granted -> {
-                            Text(
-                                "Microphone not allowed: the other side hears silence. If no question appears, " +
-                                    "allow it in Settings > Apps > OpenCell > Permissions.",
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            OutlinedButton(onClick = { ask.launch(Manifest.permission.RECORD_AUDIO) }) { Text("Allow microphone") }
-                        }
-                        !v.mic -> Text(
-                            "Microphone off: it starts when OpenCell is open on the screen.",
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        v.muted -> Text("Muted: the other side hears silence.")
+                    voiceNotice(v, granted)?.let { (text, problem) ->
+                        Text(text, color = if (problem) MaterialTheme.colorScheme.error else Color.Unspecified)
+                    }
+                    if (!granted) {
+                        OutlinedButton(onClick = { ask.launch(Manifest.permission.RECORD_AUDIO) }) { Text("Allow microphone") }
                     }
                     Text(
                         CodecId.label(v.codec) + " · " + (route?.label ?: if (v.output) "no audio device" else "no audio output"),
@@ -219,4 +215,17 @@ private fun VoiceControls(audio: CallAudio) {
             }
         }
     }
+}
+
+/**
+ * The line under Mute and Speaker: what the other side hears when it isn't the
+ * microphone, and why. Second: whether it's a problem (shown as an error).
+ */
+internal fun voiceNotice(v: VoiceState.On, granted: Boolean): Pair<String, Boolean>? = when {
+    !granted -> "Microphone not allowed: the other side hears silence. If no question appears, " +
+        "allow it in Settings > Apps > OpenCell > Permissions." to true
+    v.micFailed || v.outputFailed -> "Audio device failed, retrying…" to true
+    !v.mic -> "Microphone off: it starts when OpenCell is open on the screen." to true
+    v.muted -> "Muted: the other side hears silence." to false
+    else -> null
 }

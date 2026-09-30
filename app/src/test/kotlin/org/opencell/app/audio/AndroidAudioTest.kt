@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,7 +65,7 @@ class AndroidAudioTest {
     fun theSpeakerWritesWholeBlocks() = runTest {
         val bytes = ByteArray(AndroidAudio.BLOCK_BYTES)
         var written = 0
-        writeBlock(bytes) { _, off, len -> minOf(len, 500).also { assertEquals(written, off); written += it } }
+        assertTrue(writeBlock(bytes) { _, off, len -> minOf(len, 500).also { assertEquals(written, off); written += it } })
         assertEquals(AndroidAudio.BLOCK_BYTES, written)
         assertEquals(0L, currentTime)
     }
@@ -74,7 +75,7 @@ class AndroidAudioTest {
         // AudioTrack.write returns ERROR_DEAD_OBJECT (-6) after the audio server restarts: the
         // playout loop must keep its 120 ms clock instead of spinning.
         var calls = 0
-        writeBlock(ByteArray(AndroidAudio.BLOCK_BYTES)) { _, _, _ -> calls++; -6 }
+        assertFalse(writeBlock(ByteArray(AndroidAudio.BLOCK_BYTES)) { _, _, _ -> calls++; -6 }) // so the session rebuilds it
         assertEquals(1, calls)
         assertEquals(120L, currentTime)
     }

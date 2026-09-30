@@ -143,19 +143,20 @@ class AndroidAudio(private val context: Context, private val route: CallAudioRou
 }
 
 /**
- * Writes one whole block to [write] (partial writes are looped). An output that
- * refuses it (AudioTrack's ERROR_DEAD_OBJECT after an audio server restart, say)
- * still takes a block's time, so the playout loop keeps its 120 ms clock instead
- * of spinning for the rest of the call.
+ * Writes one whole block to [write] (partial writes are looped). False if the
+ * output refused it (AudioTrack's ERROR_DEAD_OBJECT after an audio server
+ * restart, say): the voice session then rebuilds the output. A refused block
+ * still takes a block's time, so no caller spins on a dead output.
  */
-internal suspend fun writeBlock(bytes: ByteArray, write: (ByteArray, Int, Int) -> Int) {
+internal suspend fun writeBlock(bytes: ByteArray, write: (ByteArray, Int, Int) -> Int): Boolean {
     var off = 0
     while (off < bytes.size) {
         val n = write(bytes, off, bytes.size - off)
         if (n <= 0) {
             delay(BlockCodec.BLOCK_MILLIS)
-            return
+            return false
         }
         off += n
     }
+    return true
 }

@@ -12,6 +12,9 @@ import org.opencell.core.phone.CallPhase
 import org.opencell.core.phone.Direction
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.EndCause
+import java.util.logging.Level
+import java.util.logging.Logger
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * A tone to play now: [tone] for at most [maxMillis] (null: until the call
@@ -91,6 +94,16 @@ class CallTonePlayer(
     }
 
     private suspend fun play(cue: ToneCue, plan: TonePlan) {
+        try {
+            playOn(cue, plan)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) { // a tone that can't play is skipped; it never takes the app down mid-call
+            log.log(Level.WARNING, "call tone ${cue.tone} failed", e)
+        }
+    }
+
+    private suspend fun playOn(cue: ToneCue, plan: TonePlan) {
         val out = audio.openSpeaker() ?: return
         val gen = ToneGenerator(plan[cue.tone])
         val block = ShortArray(BlockCodec.SAMPLES)
@@ -99,12 +112,16 @@ class CallTonePlayer(
         try {
             while (!gen.finished && played < (cue.maxMillis ?: Long.MAX_VALUE)) {
                 gen.fill(block)
-                out.write(block)
+                if (!out.write(block)) break // the output died: the rest of the tone is skipped
                 played += BlockCodec.BLOCK_MILLIS
             }
         } finally {
             _playing.value = null
             out.close()
         }
+    }
+
+    private companion object {
+        val log: Logger = Logger.getLogger(CallTonePlayer::class.java.name)
     }
 }

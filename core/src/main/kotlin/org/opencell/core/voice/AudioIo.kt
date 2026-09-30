@@ -33,8 +33,12 @@ interface MicInput : AutoCloseable {
 }
 
 interface SpeakerOutput : AutoCloseable {
-    /** Queues one 120 ms block, suspending while the output is full: the speaker's clock paces playout. */
-    suspend fun write(block: ShortArray)
+    /**
+     * Queues one 120 ms block, suspending while the output is full: the speaker's clock
+     * paces playout. False if the output refused it (a dead device); a refused write
+     * still takes about a block's time, so a caller never spins on it.
+     */
+    suspend fun write(block: ShortArray): Boolean
 
     override fun close()
 }

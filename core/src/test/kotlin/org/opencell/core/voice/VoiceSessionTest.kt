@@ -11,6 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.opencell.core.fakes.FakeAudio
+import org.opencell.core.fakes.FakeCodec
 import org.opencell.core.fakes.FakeCodecs
 import org.opencell.core.fakes.FakeLink
 import org.opencell.core.link.WriteResult
@@ -230,5 +231,102 @@ class VoiceSessionTest {
         r.phone.value = inCall(id = 2)
         runCurrent()
         assertFalse(r.on.muted)
+    }
+
+    @Test
+    fun aMicrophoneThatDiesMidCallIsReopenedAfterABackoff() = runTest {
+        val r = rig()
+        r.phone.value = inCall()
+        advanceTimeBy(250)
+        r.audio.mics.single().failNext = true // the audio server restarted
+        r.audio.micWorks = false // and isn't back at the first retry
+        advanceTimeBy(400)
+        assertFalse(r.on.mic)
+        assertTrue(r.on.micFailed)
+        val before = r.audio.micOpens
+        advanceTimeBy(3_000)
+        assertTrue(r.audio.micOpens - before in 1..3) // retried with a backoff, never in a loop
+        r.audio.micWorks = true
+        advanceTimeBy(4_500)
+        assertTrue(r.on.mic)
+        assertFalse(r.on.micFailed)
+        assertEquals(2, r.audio.mics.size)
+        val gaps = r.link.writeTimes.zipWithNext { a, b -> (b - a).inWholeMilliseconds }.toSet()
+        assertEquals(setOf(120L), gaps) // silence kept going out every 120 ms meanwhile
+    }
+
+    @Test
+    fun aDeadOutputIsRebuiltAfterABackoff() = runTest {
+        val r = rig()
+        r.phone.value = inCall()
+        advanceTimeBy(500)
+        val dead = r.audio.speakers.single()
+        dead.failWrites = true
+        advanceTimeBy(250)
+        assertTrue(dead.closed)
+        assertFalse(r.on.output)
+        assertTrue(r.on.outputFailed)
+        advanceTimeBy(1_200)
+        assertEquals(2, r.audio.speakers.size)
+        assertTrue(r.on.output)
+        assertFalse(r.on.outputFailed)
+        advanceTimeBy(500)
+        assertTrue(r.audio.speakers[1].played.isNotEmpty())
+    }
+
+    @Test
+    fun aCodecThatThrowsEndsVoiceWithoutCrashing() = runTest {
+        val link = FakeLink(backgroundScope, testScheduler.timeSource)
+        val phone = MutableStateFlow(idle)
+        val audio = FakeAudio()
+        val broken = VoiceCodecFactory {
+            object : VoiceCodec by FakeCodec() {
+                override fun encode(pcm: ShortArray): ByteArray = error("encoder blew up")
+            }
+        }
+        val voice = VoiceSession(link, phone, broken, audio, backgroundScope, MutableStateFlow(true), testScheduler.timeSource)
+        runCurrent()
+        phone.value = inCall()
+        advanceTimeBy(500)
+        assertTrue(voice.state.value is VoiceState.Failed)
+        assertTrue(audio.mics.single().closed)
+        assertTrue(audio.speakers.single().closed)
+    }
+
+    @Test
+    fun aCodecLibraryThatWontLoadMeansNoAudioNotACrash() = runTest {
+        val link = FakeLink(backgroundScope, testScheduler.timeSource)
+        val phone = MutableStateFlow(idle)
+        val missing = VoiceCodecFactory { throw UnsatisfiedLinkError("no libcodec2.so for this ABI") }
+        val voice = VoiceSession(link, phone, missing, FakeAudio(), backgroundScope, MutableStateFlow(true), testScheduler.timeSource)
+        runCurrent()
+        phone.value = inCall(id = 1)
+        runCurrent()
+        assertTrue(voice.state.value is VoiceState.Failed)
+        phone.value = idle
+        runCurrent()
+        assertEquals(VoiceState.Off, voice.state.value) // the session still follows the calls
+    }
+
+    @Test
+    fun afterAMicrophoneStallOnlyTheNewestBlockGoesOut() = runTest {
+        val r = rig()
+        r.phone.value = inCall()
+        advanceTimeBy(370) // 1000, 1001, 1002 sent; the read of 1003 is under way
+        r.audio.mics.single().stall(480, backlog = 3) // 1004 after 480 ms, then 1005-1007 at once
+        advanceTimeBy(800)
+        val firsts = r.link.writes.map { ((it[0].toInt() and 0xFF) shl 8) or (it[1].toInt() and 0xFF) }
+        assertEquals(listOf(1000, 1001, 1002, 1003, 1007, 1008), firsts) // 1004-1006 were stale
+        assertEquals(3, r.on.stats.late)
+    }
+
+    @Test
+    fun theCallsAudioModeIsSetBeforeTheMicrophoneOpens() = runTest {
+        // Opening the output begins the call's audio mode and route; some phones pick the
+        // microphone's route and echo canceller when capture starts.
+        val r = rig()
+        r.phone.value = inCall()
+        runCurrent()
+        assertEquals(listOf("speaker", "mic"), r.audio.opened)
     }
 }
