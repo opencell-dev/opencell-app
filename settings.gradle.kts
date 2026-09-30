@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "OpenCell"
-include(":core", ":app")
+include(":core", ":codec2", ":app")
