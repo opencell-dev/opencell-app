@@ -6,18 +6,25 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.opencell.app.audio.AndroidAudio
 import org.opencell.app.audio.CallAudio
 import org.opencell.app.audio.CallAudioRoute
+import org.opencell.app.audio.TonePlanSetting
 import org.opencell.app.ble.BleScanner
 import org.opencell.app.ble.GattConnector
 import org.opencell.app.data.PrefsPhoneMemory
 import org.opencell.app.data.TerminalRepository
+import org.opencell.codec2.Codec2
 import org.opencell.core.link.Connector
 import org.opencell.core.session.TerminalSession
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.AudioIo
 
-/** Manual dependency graph: one of each, living as long as the process. */
-class AppGraph(context: Context) {
+/**
+ * Manual dependency graph: one of each, living as long as the process.
+ * [audio] makes the voice session's audio devices (the unit tests pass silent ones).
+ */
+class AppGraph(context: Context, audio: (Context, CallAudioRoute) -> AudioIo = ::AndroidAudio) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val simulator = SimulatedTerminal(scope)
 
@@ -32,7 +39,11 @@ class AppGraph(context: Context) {
     private val prefs = context.getSharedPreferences("opencell", Context.MODE_PRIVATE)
     private val route = CallAudioRoute(context)
     private val micAllowed = MutableStateFlow(false)
-    val session: TerminalSession = TerminalSession(connector, scope, phoneMemory = PrefsPhoneMemory(prefs), micAllowed = micAllowed)
+    val tonePlan = TonePlanSetting(prefs)
+    val session: TerminalSession = TerminalSession(
+        connector, scope, phoneMemory = PrefsPhoneMemory(prefs),
+        codecs = Codec2, audio = audio(context, route), micAllowed = micAllowed, tonePlan = tonePlan.plan,
+    )
     val callAudio = CallAudio(session.voice, route, MutableStateFlow(false), micAllowed)
     val repository = TerminalRepository(
         context = context,
@@ -55,14 +66,16 @@ class AppGraph(context: Context) {
     val callActivityInFront = MutableStateFlow(false)
 }
 
-class OpenCellApplication : Application() {
+open class OpenCellApplication : Application() {
     lateinit var graph: AppGraph
         private set
 
     override fun onCreate() {
         super.onCreate()
-        graph = AppGraph(this)
+        graph = makeGraph()
     }
+
+    protected open fun makeGraph(): AppGraph = AppGraph(this)
 }
 
 val Context.graph: AppGraph get() = (applicationContext as OpenCellApplication).graph

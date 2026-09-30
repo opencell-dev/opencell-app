@@ -9,7 +9,10 @@ interface and holds no secrets. The app:
 - shows the registered number, the network's mode (Part 15 / Part 97) and the link;
 - places calls, rings for incoming calls itself (a looping ringtone and
   vibration, whatever screen is showing), answers, rejects and hangs up;
-- offers a data-frame test in a connected call (voice is not in this step);
+- carries voice in a connected call: Codec2 1200, three 40 ms frames in each
+  18-byte app data frame, with mute and speaker;
+- plays call progress tones itself (ringback, busy, reorder, SIT or number
+  unobtainable), North American or UK;
 - keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test.
 
 The BLE contract (v3) is `firmware/components/oc_term/include/oc_term_gatt.h`.
@@ -22,7 +25,10 @@ explanation folded into the refusal reason) rather than guessing.
 ## Build
 
 Needs JDK 17 or newer and the Android SDK with platform `android-37`
-(current AndroidX needs compileSdk 37; the app targets 36):
+(current AndroidX needs compileSdk 37; the app targets 36), NDK
+`27.2.12479018` and CMake `3.22.1` (`sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"`)
+for the Codec2 library, and a host C compiler for the unit tests (they load a
+host build of the same C code):
 
 ```sh
 cd android
@@ -55,12 +61,15 @@ phone state, call-flow, link and loopback tests, and the Robolectric UI tests in
 | Nearby devices (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`) | Find and connect to terminals. Scanning is declared `neverForLocation`, so no location permission is needed. | **Grant** card on the Terminal tab |
 | Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification, and the incoming-call notification (Answer / Reject, full screen). Ringing itself (the ringtone and vibration) doesn't need it. | Same card; also an **Allow** card on the Phone tab (it also shows when notifications or the calls channel are blocked in Settings), which opens the app's notification settings when the permission is already granted or a request was denied for good |
 | Camera (`CAMERA`) | Scanning the activation QR code. Pasting the code works without it. | When you tap **Scan QR code**; if it was denied for good, the Phone tab says so and links to the app's settings |
+| Microphone (`RECORD_AUDIO`) | Your side of a call. Without it the other side hears silence; you still hear them. | When a call first connects; again from **Allow microphone** on the call screen |
 | Full-screen calls (`USE_FULL_SCREEN_INTENT`) | Incoming calls over the lock screen. Android 14+ grants it by default only to Play-listed calling apps, so allow it once in Settings. Without it a call shows as a heads-up notification. | **Allow** card on the Phone tab, which opens the system setting |
 
 The app also declares these, and they need no prompt:
 - `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE`: keep the link up with the screen off.
 - `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: open the system battery dialog.
 - `VIBRATE`: vibrate for an incoming call.
+- `FOREGROUND_SERVICE_MICROPHONE`: keep the microphone during a call with the screen off.
+- `MODIFY_AUDIO_SETTINGS`: the call's audio mode and earpiece/speaker/headset choice.
 
 QR scanning uses CameraX and ZXing: it works offline and without Google Play Services.
 
@@ -149,13 +158,27 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   the call notification and call screen still appear. The call notification carries
   **Answer** / **Reject** and opens the full-screen call screen over the
   lock screen when allowed (see Permissions above).
-- **Connected**: voice is not in this step. **Send 5 test frames** sends the
-  frames `tools/ble/oc_ble.py send` sends (`b0 <seq> "oc-send"`, 9 bytes),
-  each written once (no retries — a late test frame is as useless as a late
-  voice frame would be) and only while the call is still connected; the run
-  stops the moment the call ends or the link drops. The bench's test peer
-  echoes them, another terminal receives them. The screen counts what comes
-  back.
+- **Connected**: voice, both ways. The first connected call asks for the
+  microphone; without it the other side hears silence (the call screen says
+  so and offers **Allow microphone**). **Mute** sends silence; **Speaker**
+  moves the audio from the earpiece (or a Bluetooth or wired headset, which
+  win when connected) to the loudspeaker. The small line under the buttons
+  counts voice frames sent, not sent (the terminal was busy, 0x80), received
+  and concealed (a lost frame replaced by the last one, quieter). Calling the
+  echo service (00100) plays your own voice back about a second later.
+  The microphone works in the background only if the call started while
+  OpenCell was on the screen (Android's rule for the foreground service's
+  microphone); otherwise open the app once during the call.
+- **Call progress tones** are made on the phone from the call's state; nothing
+  about them goes over the air. While an outgoing call rings: ringback. When
+  it ends before it connected: busy (busy or rejected, 6 s), reorder (no
+  answer, network failure, link lost, 4 s) or, for an unreachable number,
+  the special information tone once (UK: number unobtainable, 4 s); a
+  connected call cut by a network failure or a lost link: reorder, 4 s.
+  Answering, hanging up or closing the ended call stops a tone at once.
+  They play where the call's audio goes (earpiece, speaker, headset). The
+  plan follows the phone's region (United Kingdom: UK tones, anywhere else
+  North American); **⋮ > Call tones** on the Phone tab picks one.
 - If the phone loses the terminal during a call, the call goes on in the
   terminal. The terminal doesn't queue events while no phone is connected, so on
   reconnecting the app reads STATUS and shows where the call is; a call that
@@ -196,8 +219,11 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   advertises the OpenCell service: pairing with the code on the screen in
   front of you is what proves it is your terminal. See [`security-model.md`](https://github.com/opencell-dev/opencell/blob/main/security-model.md)'s
   "BLE hop (terminal ↔ phone)" section on the `terminal` branch.
-- **Voice isn't in this step.** A connected call has the data-frame test
-  above, not audio; see Architecture below for where the codec plugs in.
+- **Voice adds about half a second on the phone** on top of the radio path:
+  120 ms to fill a block from the microphone, 240 ms of jitter buffer and
+  about 120 ms in the audio output. No Android Telecom integration yet:
+  the system's call controls, car kits and the power key don't see OpenCell
+  calls, and a cellular call during an OpenCell call isn't arbitrated.
 - The search counts only packets the radio demodulates in the edge tier
   (LoRa SF7, 500 kHz). Other systems raise the noise floor only, and
   packets that fail the LoRa header are not reported.
@@ -221,17 +247,27 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
              PairingRules  (auth statuses, stale bond vs failed pairing)
              UplinkSender  (validation + 0x80 retry policy, ordered sends)
   phone/     PhoneReducer  (pure state machine: EVENTs, STATUS byte 3, accepted commands)
-             PhoneSession  (commands, resync on connect, in-call data test)
+             PhoneSession  (commands, resync on connect)
+  voice/     VoiceSession  (uplink paced by the microphone, drop on 0x80; downlink
+             JitterBuffer with concealment), BlockCodec (3 codec frames per app
+             data frame), VoiceCodec/CodecId, AudioIo; CallTonePlayer (toneFor),
+             ToneGenerator, TonePlans (North American, UK)
   loopback/  LoopbackRunner, LoopbackStats
   session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
   sim/       SimulatedTerminal (terminal + network: demo mode and tests)
+:codec2 (Android library)
+             Codec2 (VoiceCodec over JNI), libcodec2.so (vendored by
+             tools/codec2/vendor.sh), libopencell_codec2.so (the JNI glue)
 :app   (Android)
+  audio/     AndroidAudio (AudioRecord/AudioTrack, 8 kHz), CallAudioRoute (mode,
+             focus, earpiece/speaker/headset), CallAudio, TonePlanSetting
   ble/       GattConnector/GattConnection (serialized GATT ops), Bonder (createBond +
              ACTION_BOND_STATE_CHANGED), BleScanner
   data/      TerminalRepository (app-scoped owner of the session), PrefsPhoneMemory
   scan/      QrDecoder (ZXing), QrScanner (CameraX)
   service/   LinkService (connectedDevice foreground service, owns ringing via
-             RingPlan), CallRinger, CallNotifier, CallActionReceiver
+             RingPlan and the microphone type via MicPlan), CallRinger,
+             CallNotifier, CallActionReceiver
   ui/        Compose: Phone (activation, home, dialer), CallScreen/CallActivity,
              Terminal/Status, Console, Loopback
 ```
@@ -246,10 +282,13 @@ with the terminal (`ble/Bonder.kt`) before touching any characteristic. Above
 `Connector`, pairing shows up only as `LinkState.Pairing` (the code hint) and
 `LinkState.PairingFailed` (Retry, or Bluetooth settings for a stale bond).
 
-The voice codec will plug into `TerminalLink` next to `PhoneSession`: it should
-write once per 120 ms frame between CONNECTED and ENDED and drop a frame on
-0x80 instead of retrying, because a late voice frame is useless. Codec2 1200
-packs three 40 ms frames into 18 bytes, one app data frame per radio frame.
+Voice (`core/.../voice/VoiceSession.kt`) runs while the call is CONNECTED and
+the link is up. It writes once per 120 ms block with `TerminalLink.writeUp` and
+drops a block on 0x80 instead of retrying, because a late voice frame is
+useless. Codec2 1200 packs three 40 ms frames into 18 bytes, one app data frame
+per radio frame. CONNECTED's codec byte picks the codec (1 = Codec2 1200, the
+only one any network sends); see the voice design spec in the opencell
+repository.
 
 ## Third-party notices
 
@@ -257,3 +296,10 @@ QR codes are decoded with [ZXing](https://github.com/zxing/zxing) (`com.google.z
 Copyright ZXing authors, licensed under the Apache License, Version 2.0
 (https://www.apache.org/licenses/LICENSE-2.0). The camera viewfinder uses
 AndroidX CameraX, also Apache-2.0.
+
+Voice uses [Codec 2](https://github.com/drowe67/codec2) by David Rowe and
+contributors, licensed under the GNU Lesser General Public License, version 2.1
+(`codec2/src/main/cpp/codec2/COPYING`). The vocoder's source is in
+`codec2/src/main/cpp/codec2` exactly as `tools/codec2/vendor.sh` takes it from
+upstream commit `310777b1c6f1af0bc7c72f5b32f80f6fd9136962`; it is built as its
+own shared library, `libcodec2.so`, which can be replaced with a modified build.

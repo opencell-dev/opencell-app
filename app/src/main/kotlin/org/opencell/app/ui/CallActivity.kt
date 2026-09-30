@@ -55,11 +55,27 @@ class CallActivity : ComponentActivity() {
                 CallScreen(
                     phone,
                     graph.session.link.state,
+                    graph.callAudio,
                     onRetry = graph.repository::connect,
                     onClose = { phone.dismissCall(); finish() },
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        graph.callActivityInFront.value = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        graph.callAudio.refreshPermission(this)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        graph.callActivityInFront.value = false
     }
 
     override fun onNewIntent(intent: Intent) {

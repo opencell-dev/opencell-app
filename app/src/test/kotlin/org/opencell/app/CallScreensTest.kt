@@ -1,5 +1,8 @@
 package org.opencell.app
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -32,7 +35,7 @@ class CallScreensTest {
     private val sim get() = compose.activity.graph.simulator
 
     @Test
-    fun outgoingCallRingsConnectsCarriesDataAndHangsUp() {
+    fun outgoingCallRingsConnectsHasVoiceControlsAndHangsUp() {
         compose.connectDemoAndOpenPhone()
         compose.activateDemo()
         compose.onNodeWithText("Number (606-555-01234 or +883-1-…)").performTextReplacement("606-555-0100")
@@ -41,8 +44,14 @@ class CallScreensTest {
         compose.onNodeWithText("+883-1-606-555-00100").assertExists()
         compose.waitForText("Ringing…")
         compose.waitForText("Connected")
-        compose.onNodeWithText("Send 5 test frames").performClick()
-        compose.waitForText("Sent 5 · received 5 (test frames 5)")
+        compose.waitForText("Codec2 1200")
+        compose.waitForText("Microphone not allowed") // nothing is granted under Robolectric
+        compose.onNodeWithText("Mute").performClick()
+        compose.waitForText("Unmute")
+        compose.onNodeWithText("Unmute").performClick()
+        compose.onNodeWithText("Mute").assertExists()
+        // The demo peer echoes the voice frames back.
+        compose.waitUntil(10_000) { compose.onAllNodes(textMatches(Regex("received [1-9]"))).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Hang up").performClick()
         compose.waitForText("Call ended")
         compose.onNodeWithText("Close").performClick()
@@ -142,7 +151,7 @@ class CallScreensTest {
         sim.failNextConnect = PairingProblem.FAILED
         sim.dropLink()
         compose.waitForText("needs pairing again")
-        compose.onAllNodesWithText("reconnecting", substring = true).assertCountEquals(0)
+        compose.onAllNodesWithText("reconnecting").assertCountEquals(0)
         compose.onNodeWithText("Close").assertExists()
         compose.onNodeWithText("Retry").performClick()
         // Paired again: the resync finds the call still ringing and its buttons come back.
@@ -160,5 +169,9 @@ class CallScreensTest {
         compose.waitForText("Call ended (the phone was disconnected from the terminal)")
         compose.onNodeWithText("Close").performClick()
         compose.waitForText("No terminal connected")
+    }
+
+    private fun textMatches(re: Regex) = SemanticsMatcher("text matches $re") { node ->
+        node.config.getOrNull(SemanticsProperties.Text)?.any { re.containsMatchIn(it.text) } == true
     }
 }

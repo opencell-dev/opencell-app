@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -43,6 +44,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -63,6 +66,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.opencell.app.audio.TonePlanSetting
 import org.opencell.app.ui.theme.CallGreen
 import org.opencell.app.ui.theme.MonoStyle
 import org.opencell.core.link.LinkState
@@ -74,6 +78,7 @@ import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.SigState
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.TonePlans
 
 /**
  * The Phone tab: what a subscriber sees. Picks one of: no terminal, waiting
@@ -89,6 +94,7 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     // Saveable: folding or unfolding recreates the activity, and must not close these.
     var menu by rememberSaveable { mutableStateOf(false) }
     var confirmDeactivate by rememberSaveable { mutableStateOf(false) }
+    var chooseTones by rememberSaveable { mutableStateOf(false) }
     val activated = phone.linkUp && phone.sig != null && phone.sig != SigState.NOT_ACTIVATED
 
     Scaffold(
@@ -106,6 +112,10 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                             DropdownMenuItem(
                                 text = { Text("Deactivate terminal") },
                                 onClick = { menu = false; confirmDeactivate = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Call tones") },
+                                onClick = { menu = false; chooseTones = true },
                             )
                         }
                     }
@@ -132,6 +142,8 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
             phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
         }
     }
+
+    if (chooseTones) CallTonesDialog(vm.tonePlan, onDismiss = { chooseTones = false })
 
     if (confirmDeactivate) {
         AlertDialog(
@@ -454,4 +466,34 @@ fun NoticeLine(text: String, onDismiss: () -> Unit) {
         Text(text, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         TextButton(onClick = onDismiss) { Text("Dismiss") }
     }
+}
+
+/** The call progress tones setting (voice spec §6.4): automatic by the phone's region, or a plan. */
+@Composable
+private fun CallTonesDialog(setting: TonePlanSetting, onDismiss: () -> Unit) {
+    val choice by setting.choice.collectAsStateWithLifecycle()
+    val options = listOf(TonePlanSetting.AUTO to "Automatic (${setting.automatic.label})") +
+        TonePlans.ALL.map { it.id to it.label }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Call tones") },
+        text = {
+            Column {
+                Text(
+                    "The ringback, busy and failure tones you hear while a call is set up.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                options.forEach { (id, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().selectable(selected = choice == id, role = Role.RadioButton) { setting.set(id) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = choice == id, onClick = null)
+                        Text(label, Modifier.padding(start = 8.dp, top = 12.dp, bottom = 12.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }

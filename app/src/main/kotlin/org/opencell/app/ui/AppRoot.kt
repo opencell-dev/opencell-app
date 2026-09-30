@@ -58,7 +58,7 @@ fun AppRoot(vm: MainViewModel) {
     val phone by vm.phone.collectAsStateWithLifecycle()
     if (phone.call != null) {
         // Any call (ringing, connected or just ended) takes the whole screen, whatever tab is open.
-        CallScreen(vm.phoneSession, vm.linkState, onRetry = vm::connect)
+        CallScreen(vm.phoneSession, vm.linkState, vm.callAudio, onRetry = vm::connect)
         return
     }
 

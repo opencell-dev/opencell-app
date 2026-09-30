@@ -173,6 +173,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The phone side of the terminal; the call screen talks to it directly (it is shared with CallActivity). */
     val phoneSession = session.phone
+    val callAudio = app.graph.callAudio
+    val tonePlan = app.graph.tonePlan
     val phone = phoneSession.state
 
     /** True while connected (or connecting) to the demo terminal, which offers demo activation codes. */

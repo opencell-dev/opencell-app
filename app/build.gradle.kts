@@ -38,6 +38,9 @@ android {
                 // Robolectric pokes FileDescriptor internals on JDK 17+.
                 it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
                 it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED")
+                // The app graph uses the real Codec2: the host build of :codec2's native code.
+                it.dependsOn(":codec2:hostCodec2")
+                it.systemProperty("java.library.path", rootProject.layout.projectDirectory.dir("codec2/build/host-codec2").asFile.path)
             }
         }
     }
@@ -55,6 +58,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":codec2"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
