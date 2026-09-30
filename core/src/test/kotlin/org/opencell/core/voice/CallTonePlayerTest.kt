@@ -96,6 +96,20 @@ class CallTonePlayerTest {
     }
 
     @Test
+    fun ringbackStopsWhenThePhoneLosesTheTerminal() = runTest {
+        // LinkDown only clears linkUp: the call stays RINGING, and ringback has no timeout.
+        assertNull(toneFor(state(CallPhase.RINGING).copy(linkUp = false)))
+        val (phone, audio, p) = player()
+        phone.value = state(CallPhase.RINGING)
+        runCurrent()
+        assertEquals(CallTone.RINGBACK, p.playing.value)
+        phone.value = state(CallPhase.RINGING).copy(linkUp = false)
+        runCurrent()
+        assertNull(p.playing.value)
+        assertTrue(audio.speakers.single().closed)
+    }
+
+    @Test
     fun busyPlaysSixSecondsThenStops() = runTest {
         val (phone, audio, p) = player()
         phone.value = state(CallPhase.ENDED, cause = EndCause.BUSY.code)

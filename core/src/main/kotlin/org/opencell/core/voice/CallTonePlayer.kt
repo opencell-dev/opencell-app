@@ -23,7 +23,7 @@ data class ToneCue(val tone: CallTone, val maxMillis: Long?, val key: Long)
  * Which call progress tone the phone should be playing (voice spec §6.3), from
  * the phone's state alone. Tones are local: nothing about them goes over the air.
  *
- * - Ringback while an outgoing call is RINGING (the far end got ALERTING).
+ * - Ringback while an outgoing call is RINGING (the far end got ALERTING) and the terminal is connected.
  * - After an outgoing call ends before it connected: busy for "busy" and
  *   "rejected", unobtainable for "unreachable", reorder for "no answer",
  *   "network failure", "link lost" and causes this app doesn't know; nothing
@@ -37,7 +37,7 @@ data class ToneCue(val tone: CallTone, val maxMillis: Long?, val key: Long)
 fun toneFor(s: PhoneState): ToneCue? {
     val c = s.call ?: return null
     return when (c.phase) {
-        CallPhase.RINGING -> if (c.direction != Direction.INCOMING) ToneCue(CallTone.RINGBACK, null, c.id ?: 0) else null
+        CallPhase.RINGING -> if (s.linkUp && c.direction != Direction.INCOMING) ToneCue(CallTone.RINGBACK, null, c.id ?: 0) else null
         CallPhase.ENDED -> {
             val cause = c.causeCode ?: return null
             val tone = if (c.connectedAt == null) {
