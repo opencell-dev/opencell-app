@@ -177,6 +177,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val tonePlan = app.graph.tonePlan
     val phone = phoneSession.state
 
+    // --- developer options ---
+
+    private val developerAccess = app.graph.developerAccess
+    val devUnlocked = developerAccess.unlocked
+
+    /** True (and unlocked, remembered) if [code] is the developer code. */
+    fun unlockDeveloper(code: String): Boolean = developerAccess.tryUnlock(code)
+    fun lockDeveloper() = developerAccess.lock()
+
     /** True while connected (or connecting) to the demo terminal, which offers demo activation codes. */
     val isDemo: Boolean get() = (linkState.value.target ?: wanted.value)?.address == SimulatedTerminal.ADDRESS
 

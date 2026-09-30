@@ -17,6 +17,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.dev.DeveloperAccess
 import org.robolectric.annotation.Config
 
 /**
@@ -50,6 +51,9 @@ class AppSmokeTest {
     }
 
     private fun openDemoTerminal() {
+        // The demo terminal (and Console/Loopback below) are developer features: unlock
+        // directly rather than driving the code dialog in every test that needs them.
+        compose.activity.graph.developerAccess.tryUnlock(DeveloperAccess.CODE)
         openTerminalTab()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Demo terminal"))
         compose.onNodeWithText("Demo terminal").performClick()

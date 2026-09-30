@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.printToString
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.dev.DeveloperAccess
 
 /** Shared steps of the Robolectric UI tests, driving the app against the demo terminal. */
 typealias AppRule = AndroidComposeTestRule<*, MainActivity>
@@ -24,9 +25,15 @@ fun AppRule.waitForText(text: String, timeoutMillis: Long = 10_000) {
     }
 }
 
-/** From the start screen: connect the demo terminal on the Terminal tab and come back to Phone. */
+/**
+ * From the start screen: connect the demo terminal on the Terminal tab and come back to Phone.
+ * The demo terminal is a developer feature, so this unlocks Developer options directly
+ * (bypassing its own dialog, which [org.opencell.app.DeveloperOptionsTest] covers) rather than
+ * making every test that needs the demo terminal drive the unlock UI first.
+ */
 fun AppRule.connectDemoAndOpenPhone() {
     waitForText("No terminal connected")
+    activity.graph.developerAccess.tryUnlock(DeveloperAccess.CODE)
     onNodeWithText("Terminal").performClick()
     onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Demo terminal"))
     onNodeWithText("Demo terminal").performClick()

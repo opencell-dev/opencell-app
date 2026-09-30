@@ -25,6 +25,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,11 +39,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowSizeClass
 import org.opencell.core.link.LinkState
 
-enum class Destination(val label: String, val icon: ImageVector) {
+enum class Destination(val label: String, val icon: ImageVector, val developerOnly: Boolean = false) {
     PHONE("Phone", Icons.Filled.Phone),
     TERMINAL("Terminal", Icons.Filled.Settings),
-    CONSOLE("Console", Icons.AutoMirrored.Filled.Send),
-    LOOPBACK("Loopback", Icons.Filled.Refresh),
+    CONSOLE("Console", Icons.AutoMirrored.Filled.Send, developerOnly = true),
+    LOOPBACK("Loopback", Icons.Filled.Refresh, developerOnly = true),
 }
 
 /**
@@ -56,17 +57,27 @@ enum class Destination(val label: String, val icon: ImageVector) {
 fun AppRoot(vm: MainViewModel) {
     var destination by rememberSaveable { mutableStateOf(Destination.PHONE) }
     val phone by vm.phone.collectAsStateWithLifecycle()
+    val devUnlocked by vm.devUnlocked.collectAsStateWithLifecycle()
+    // Rendered as a sibling of the tab content below, so it overlays whichever tab is open;
+    // the Terminal tab's ⋮ menu is what opens it (DeveloperOptionsDialog's KDoc explains why
+    // it isn't a platform AlertDialog).
+    var showDeveloperDialog by rememberSaveable { mutableStateOf(false) }
     if (phone.call != null) {
         // Any call (ringing, connected or just ended) takes the whole screen, whatever tab is open.
-        CallScreen(vm.phoneSession, vm.linkState, vm.callAudio, onRetry = vm::connect)
+        CallScreen(vm.phoneSession, vm.linkState, vm.callAudio, devUnlocked, onRetry = vm::connect)
         return
     }
 
+    // Locking developer options while a developer-only tab is open falls back to Phone; shown
+    // is computed rather than waiting a frame for the effect, so the tab never flashes its content.
+    val shown = if (!devUnlocked && destination.developerOnly) Destination.PHONE else destination
+    LaunchedEffect(shown) { destination = shown }
+
     NavigationSuiteScaffold(
         navigationSuiteItems = {
-            Destination.entries.forEach { d ->
+            Destination.entries.filter { !it.developerOnly || devUnlocked }.forEach { d ->
                 item(
-                    selected = d == destination,
+                    selected = d == shown,
                     onClick = { destination = d },
                     icon = { Icon(d.icon, contentDescription = null) },
                     label = { Text(d.label) },
@@ -74,9 +85,13 @@ fun AppRoot(vm: MainViewModel) {
             }
         },
     ) {
-        when (destination) {
+        when (shown) {
             Destination.PHONE -> PhoneScreen(vm, onOpenTerminal = { destination = Destination.TERMINAL })
-            Destination.TERMINAL -> TerminalListDetail(vm)
+            Destination.TERMINAL -> TerminalListDetail(
+                vm,
+                devUnlocked = devUnlocked,
+                onOpenDeveloperOptions = { showDeveloperDialog = true },
+            )
             Destination.CONSOLE -> WithStatusPanel(vm, onOpenTerminal = { destination = Destination.TERMINAL }) {
                 ConsoleScreen(vm)
             }
@@ -84,6 +99,15 @@ fun AppRoot(vm: MainViewModel) {
                 LoopbackScreen(vm)
             }
         }
+    }
+
+    if (showDeveloperDialog) {
+        DeveloperOptionsDialog(
+            unlocked = devUnlocked,
+            onUnlock = vm::unlockDeveloper,
+            onLock = vm::lockDeveloper,
+            onDismiss = { showDeveloperDialog = false },
+        )
     }
 }
 

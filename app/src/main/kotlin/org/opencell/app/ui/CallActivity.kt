@@ -5,6 +5,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -52,10 +54,12 @@ class CallActivity : ComponentActivity() {
         }
         setContent {
             OpenCellTheme {
+                val devUnlocked by graph.developerAccess.unlocked.collectAsStateWithLifecycle()
                 CallScreen(
                     phone,
                     graph.session.link.state,
                     graph.callAudio,
+                    devUnlocked,
                     onRetry = graph.repository::connect,
                     onClose = { phone.dismissCall(); finish() },
                 )

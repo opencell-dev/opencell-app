@@ -52,7 +52,8 @@ import org.opencell.core.voice.VoiceState
  * Outgoing, incoming, in-call and ended screens, shown full-screen over the app
  * whenever there is a call (and by CallActivity over the lock screen). A
  * connected call has voice ([audio]): mute, speaker, and a line saying what
- * the audio is doing.
+ * the audio is doing; [devUnlocked] also shows the voice frame counters
+ * (sent, not sent, received, concealed) behind Developer options.
  * [onClose] closes an ended call, or any call while the link is down
  * ([PhoneSession.dismissCall] drops it then; the next resync restores it if
  * it is still up in the terminal). When the link ended in a pairing failure
@@ -63,6 +64,7 @@ fun CallScreen(
     session: PhoneSession,
     link: StateFlow<LinkState>,
     audio: CallAudio,
+    devUnlocked: Boolean,
     onRetry: (LinkTarget) -> Unit,
     onClose: () -> Unit = session::dismissCall,
 ) {
@@ -129,7 +131,7 @@ fun CallScreen(
                 linkLost -> OutlinedButton(onClick = onClose) { Text("Close") }
                 else -> CallButtons(call, session, onClose)
             }
-            if (call.phase == CallPhase.CONNECTED && phone.linkUp) VoiceControls(audio)
+            if (call.phase == CallPhase.CONNECTED && phone.linkUp) VoiceControls(audio, devUnlocked)
             phone.notice?.let { NoticeLine(it, onDismiss = session::clearNotice) }
         }
     }
@@ -156,9 +158,11 @@ private fun CallButtons(call: Call, session: PhoneSession, onClose: () -> Unit) 
 /**
  * Mute, speaker, and what the call's audio is doing. RECORD_AUDIO is asked for
  * when a call first connects (voice spec §5.7), and again from "Allow microphone".
+ * [devUnlocked] shows the frame counters underneath: ordinary users don't need
+ * them, so they sit behind Developer options like Console and Loopback.
  */
 @Composable
-private fun VoiceControls(audio: CallAudio) {
+private fun VoiceControls(audio: CallAudio, devUnlocked: Boolean) {
     val voice by audio.voice.state.collectAsStateWithLifecycle()
     val speaker by audio.route.speaker.collectAsStateWithLifecycle()
     val route by audio.route.route.collectAsStateWithLifecycle()
@@ -205,12 +209,14 @@ private fun VoiceControls(audio: CallAudio) {
                         CodecId.label(v.codec) + " · " + (route?.label ?: if (v.output) "no audio device" else "no audio output"),
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    val s = v.stats
-                    Text(
-                        "Sent ${s.sent} · not sent ${s.dropped + s.late + s.failed} · received ${s.received} · " +
-                            "concealed ${s.jitter.concealed}",
-                        style = MonoStyle,
-                    )
+                    if (devUnlocked) {
+                        val s = v.stats
+                        Text(
+                            "Sent ${s.sent} · not sent ${s.dropped + s.late + s.failed} · received ${s.received} · " +
+                                "concealed ${s.jitter.concealed}",
+                            style = MonoStyle,
+                        )
+                    }
                 }
             }
         }

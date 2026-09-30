@@ -13,7 +13,9 @@ interface and holds no secrets. The app:
   18-byte app data frame, with mute and speaker;
 - plays call progress tones itself (ringback, busy, reorder, SIT or number
   unobtainable), North American or UK;
-- keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test.
+- keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test,
+  and a demo terminal — behind Developer options, a static code (matching the
+  iOS app).
 
 The BLE contract (v3) is `firmware/components/oc_term/include/oc_term_gatt.h`.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
@@ -116,7 +118,8 @@ also do all of the following:
 - **Demo terminal** is a simulated terminal and network, for trying everything
   without hardware. It offers **Use a demo code** for activation, its test peer
   (**Test peer**, +883-1-606-555-00100) answers after 3 s, calling your own
-  number is busy, and +883-1-606-555-09999 is unreachable.
+  number is busy, and +883-1-606-555-09999 is unreachable. It's a developer
+  feature (see **Developer options** below): it only shows up once unlocked.
 
 ### Activate (Phone tab)
 
@@ -162,10 +165,11 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   microphone; without it the other side hears silence (the call screen says
   so and offers **Allow microphone**). **Mute** sends silence; **Speaker**
   moves the audio from the earpiece (or a Bluetooth or wired headset, which
-  win when connected) to the loudspeaker. The small line under the buttons
-  counts voice frames sent, not sent (the terminal was busy, 0x80), received
-  and concealed (a lost frame replaced by the last one, quieter). Calling the
-  echo service (00100) plays your own voice back about a second later.
+  win when connected) to the loudspeaker. Once Developer options are unlocked
+  (see below), a small line under the buttons counts voice frames sent, not
+  sent (the terminal was busy, 0x80), received and concealed (a lost frame
+  replaced by the last one, quieter). Calling the echo service (00100) plays
+  your own voice back about a second later.
   The microphone works in the background only if the call started while
   OpenCell was on the screen (Android's rule for the foreground service's
   microphone); otherwise open the app once during the call.
@@ -193,21 +197,38 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
 
 - **Status** (Terminal tab): the decoded STATUS (state, band, tier, signalling
   state, RSSI, SNR, TMID, frame, cell seed). It updates live; **Refresh** reads it.
-- **Console**: send text (UTF-8) or hex (`48 45 4c`, `48-45-4C`, `0x48 …`) on UP, and see
-  every UP, DOWN, EVENT, COMMAND and link event with a timestamp.
-  - Limits: at most 18 bytes per frame, and only while the terminal holds a
-    grant (ATT **0x80** otherwise).
-  - Retries: 0x80 on UP is retried after 120, 240, 480 and 960 ms, then every
-    1 s, for 8 attempts in all (about 4.8 s). ATT **0x0D** ("too long") is never
-    retried. COMMANDs are never retried: 0x80 there means the terminal is in
-    another state, so the app shows why and reads STATUS again; sending the
-    same command again while one is still in flight (a double-tap on Answer,
-    say) is ignored, not queued.
-- **Loopback**: the bench loopback test (a cell that echoes each UL frame on DL).
-  It needs a grant: outside a call that means a test cell (`ocbench cell`) that
-  keeps the terminal granted. The defaults are 20 probes, one every 1000 ms,
-  payload `HELLO` with a sequence tag (`HELLO#00`, …). The summary shows sent,
-  echoed, lost, refused, stray DOWNs, and latency.
+  Available to every user: it's what confirms the terminal is alive.
+- **Console** and **Loopback** (tabs), the demo terminal and the call screen's
+  voice frame counters are developer features, behind **Developer options**
+  (below); ordinary use of the app — activating, calling, checking status —
+  never needs them.
+  - **Console**: send text (UTF-8) or hex (`48 45 4c`, `48-45-4C`, `0x48 …`) on UP, and see
+    every UP, DOWN, EVENT, COMMAND and link event with a timestamp.
+    - Limits: at most 18 bytes per frame, and only while the terminal holds a
+      grant (ATT **0x80** otherwise).
+    - Retries: 0x80 on UP is retried after 120, 240, 480 and 960 ms, then every
+      1 s, for 8 attempts in all (about 4.8 s). ATT **0x0D** ("too long") is never
+      retried. COMMANDs are never retried: 0x80 there means the terminal is in
+      another state, so the app shows why and reads STATUS again; sending the
+      same command again while one is still in flight (a double-tap on Answer,
+      say) is ignored, not queued.
+  - **Loopback**: the bench loopback test (a cell that echoes each UL frame on DL).
+    It needs a grant: outside a call that means a test cell (`ocbench cell`) that
+    keeps the terminal granted. The defaults are 20 probes, one every 1000 ms,
+    payload `HELLO` with a sequence tag (`HELLO#00`, …). The summary shows sent,
+    echoed, lost, refused, stray DOWNs, and latency.
+
+### Developer options
+
+Console, Loopback, the demo terminal and the call screen's voice frame
+counters are behind a static access code — **Terminal tab > ⋮ > Developer
+options** — matching what the iOS app does. The code is `67362355`
+("OPENCELL" on a phone keypad); it lives in this public source, so it's a
+speed bump against cluttering the app for ordinary users, not security. A
+wrong code just says so (no lockout, try again straight away); the right
+code unlocks Console, Loopback, the demo terminal and the voice stats line
+for good — remembered like any other setting — until **Developer options >
+Lock** turns them off again.
 
 ## Known limitations
 
@@ -255,6 +276,7 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   loopback/  LoopbackRunner, LoopbackStats
   session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
   sim/       SimulatedTerminal (terminal + network: demo mode and tests)
+  dev/       DeveloperAccess (the static code, JVM-testable, shared with iOS's copy)
 :codec2 (Android library)
              Codec2 (VoiceCodec over JNI), libcodec2.so (vendored by
              tools/codec2/vendor.sh), libopencell_codec2.so (the JNI glue)
@@ -263,13 +285,14 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
              focus, earpiece/speaker/headset), CallAudio, TonePlanSetting
   ble/       GattConnector/GattConnection (serialized GATT ops), Bonder (createBond +
              ACTION_BOND_STATE_CHANGED), BleScanner
-  data/      TerminalRepository (app-scoped owner of the session), PrefsPhoneMemory
+  data/      TerminalRepository (app-scoped owner of the session), PrefsPhoneMemory,
+             DeveloperUnlock (Console/Loopback/demo terminal gate, remembered)
   scan/      QrDecoder (ZXing), QrScanner (CameraX)
   service/   LinkService (connectedDevice foreground service, owns ringing via
              RingPlan and the microphone type via MicPlan), CallRinger,
              CallNotifier, CallActionReceiver
   ui/        Compose: Phone (activation, home, dialer), CallScreen/CallActivity,
-             Terminal/Status, Console, Loopback
+             Terminal/Status, Console, Loopback, DeveloperOptionsDialog
 ```
 
 The link lives in the Application, not in an Activity or ViewModel.

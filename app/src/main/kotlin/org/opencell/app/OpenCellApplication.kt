@@ -12,6 +12,7 @@ import org.opencell.app.audio.CallAudioRoute
 import org.opencell.app.audio.TonePlanSetting
 import org.opencell.app.ble.BleScanner
 import org.opencell.app.ble.GattConnector
+import org.opencell.app.data.DeveloperUnlock
 import org.opencell.app.data.PrefsPhoneMemory
 import org.opencell.app.data.TerminalRepository
 import org.opencell.codec2.Codec2
@@ -40,6 +41,9 @@ class AppGraph(context: Context, audio: (Context, CallAudioRoute) -> AudioIo = :
     private val route = CallAudioRoute(context)
     private val micAllowed = MutableStateFlow(false)
     val tonePlan = TonePlanSetting(prefs)
+
+    /** Console, Loopback, the demo terminal and the voice stats line, behind a static code. */
+    val developerAccess = DeveloperUnlock(prefs)
     val session: TerminalSession = TerminalSession(
         connector, scope, phoneMemory = PrefsPhoneMemory(prefs),
         codecs = Codec2, audio = audio(context, route), micAllowed = micAllowed, tonePlan = tonePlan.plan,
