@@ -27,6 +27,9 @@ import org.opencell.core.phone.PhoneSession
 import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalState
 import org.opencell.core.voice.AudioIo
+import org.opencell.core.voice.CallTonePlayer
+import org.opencell.core.voice.TonePlan
+import org.opencell.core.voice.TonePlans
 import org.opencell.core.voice.VoiceCodecFactory
 import org.opencell.core.voice.VoiceSession
 import org.opencell.core.voice.VoiceState
@@ -37,8 +40,9 @@ import kotlin.time.TimeSource
  * link (with reconnects), UP sending with retries, the phone (activation,
  * registration, calls), voice in connected calls, the console log and the
  * loopback test. The Android layer only supplies a [Connector], a long-lived
- * [scope], a [PhoneMemory] and, for voice, the codecs, the audio devices and
- * whether the microphone may be used now ([micAllowed]).
+ * [scope], a [PhoneMemory] and, for voice, the codecs, the audio devices,
+ * whether the microphone may be used now ([micAllowed]) and the call progress
+ * tones' plan ([tonePlan]).
  */
 class TerminalSession(
     connector: Connector,
@@ -51,6 +55,7 @@ class TerminalSession(
     codecs: VoiceCodecFactory = VoiceCodecFactory.NONE,
     audio: AudioIo = AudioIo.NONE,
     micAllowed: StateFlow<Boolean> = MutableStateFlow(true),
+    tonePlan: StateFlow<TonePlan> = MutableStateFlow(TonePlans.NORTH_AMERICA),
 ) {
     val link = LinkManager(connector, scope, reconnect, timeSource, wallClock)
     val sender = UplinkSender(link, retryPolicy)
@@ -61,6 +66,7 @@ class TerminalSession(
         monotonic = { started.elapsedNow().inWholeMilliseconds },
     )
     val voice = VoiceSession(link, phone.state, codecs, audio, scope, micAllowed, timeSource)
+    val tones = CallTonePlayer(phone.state, tonePlan, audio, scope)
     private val runner = LoopbackRunner(link, sender, timeSource)
 
     private val _loopback = MutableStateFlow<LoopbackReport?>(null)
