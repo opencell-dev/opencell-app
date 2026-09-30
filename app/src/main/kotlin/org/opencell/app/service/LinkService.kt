@@ -35,10 +35,13 @@ import org.opencell.core.protocol.TerminalStatus
  * service holds the process in the foreground, shows the ongoing
  * notification, and is the sole ring source for an incoming call
  * ([CallRinger], [CallNotifier], per [ringPlan]) regardless of which screen
- * is visible. It stops itself when the user disconnects.
+ * is visible. During a call it also holds the `microphone` type, per
+ * [micPlan], and says so in [org.opencell.app.audio.CallAudio.micAllowed].
+ * It stops itself when the user disconnects.
  */
 class LinkService : LifecycleService() {
     private var watching = false
+    private var micType = false
     private val callNotifier by lazy { CallNotifier(this) }
     private val callRinger by lazy { CallRinger(this) }
 
@@ -71,7 +74,7 @@ class LinkService : LifecycleService() {
             this,
             NOTIFICATION_ID,
             notification(LinkState.Disconnected, null),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            types(micType),
         )
         true
     } catch (e: Exception) {
@@ -80,6 +83,31 @@ class LinkService : LifecycleService() {
         stopSelf()
         false
     }
+
+    /**
+     * Takes or gives up the microphone type (the notification stays). Android refuses it
+     * with a SecurityException when the app isn't in front or lacks RECORD_AUDIO: then the
+     * call goes on, and silence goes out instead of the microphone.
+     */
+    private fun setMicrophone(on: Boolean) {
+        if (on != micType) {
+            micType = try {
+                ServiceCompat.startForeground(
+                    this, NOTIFICATION_ID,
+                    notification(graph.session.link.state.value, graph.session.link.status.value, graph.session.phone.state.value),
+                    types(on),
+                )
+                on
+            } catch (e: Exception) {
+                Log.w(TAG, "microphone type refused", e)
+                false
+            }
+        }
+        graph.callAudio.micAllowed.value = micType
+    }
+
+    private fun types(mic: Boolean): Int =
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
 
     private fun watch() {
         val repo = graph.repository
@@ -108,9 +136,16 @@ class LinkService : LifecycleService() {
                     if (plan.notify && call != null) callNotifier.showIncoming(call) else callNotifier.cancel()
                 }
         }
+        lifecycleScope.launch {
+            val front = combine(graph.mainActivityInFront, graph.callActivityInFront) { m, c -> m || c }
+            combine(phone.state, front, graph.callAudio.micGranted) { p, f, g -> Triple(p.activeCall != null, f, g) }
+                .distinctUntilChanged()
+                .collect { (call, f, g) -> setMicrophone(micPlan(call, f, g, micType)) }
+        }
     }
 
     private fun stop() {
+        graph.callAudio.micAllowed.value = false
         callRinger.stop()
         callNotifier.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -126,6 +161,7 @@ class LinkService : LifecycleService() {
      * ringing forever.
      */
     override fun onDestroy() {
+        graph.callAudio.micAllowed.value = false
         callRinger.stop()
         callNotifier.cancel()
         super.onDestroy()

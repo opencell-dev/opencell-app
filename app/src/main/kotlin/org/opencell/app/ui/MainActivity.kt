@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshEnvironment()
+        graph.callAudio.refreshPermission(this)
     }
 
     override fun onStart() {

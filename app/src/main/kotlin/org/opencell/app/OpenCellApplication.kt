@@ -6,6 +6,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.opencell.app.audio.CallAudio
+import org.opencell.app.audio.CallAudioRoute
 import org.opencell.app.ble.BleScanner
 import org.opencell.app.ble.GattConnector
 import org.opencell.app.data.PrefsPhoneMemory
@@ -28,7 +30,10 @@ class AppGraph(context: Context) {
     }
 
     private val prefs = context.getSharedPreferences("opencell", Context.MODE_PRIVATE)
-    val session: TerminalSession = TerminalSession(connector, scope, phoneMemory = PrefsPhoneMemory(prefs))
+    private val route = CallAudioRoute(context)
+    private val micAllowed = MutableStateFlow(false)
+    val session: TerminalSession = TerminalSession(connector, scope, phoneMemory = PrefsPhoneMemory(prefs), micAllowed = micAllowed)
+    val callAudio = CallAudio(session.voice, route, MutableStateFlow(false), micAllowed)
     val repository = TerminalRepository(
         context = context,
         session = session,
@@ -45,6 +50,9 @@ class AppGraph(context: Context) {
      * being on screen doesn't itself count as "the app is in front" and hide it.
      */
     val mainActivityInFront = MutableStateFlow(false)
+
+    /** Whether [org.opencell.app.ui.CallActivity] is started (with [mainActivityInFront]: the app is in front). */
+    val callActivityInFront = MutableStateFlow(false)
 }
 
 class OpenCellApplication : Application() {
