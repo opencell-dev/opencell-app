@@ -25,6 +25,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -105,6 +107,13 @@ fun AppRoot(vm: MainViewModel) {
     LaunchedEffect(devUnlocked) { if (!devUnlocked && destination.developerOnly) destination = Destination.PHONE }
 
     NavigationSuiteScaffold(
+        // A rail on any wide window, short ones included: the cover screen sideways is only
+        // about 411 dp high, and a bottom bar would take 80 of them from the keypad.
+        layoutType = if (isWide()) {
+            NavigationSuiteType.NavigationRail
+        } else {
+            NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(currentWindowAdaptiveInfoV2())
+        },
         navigationSuiteItems = {
             Destination.entries.filter { !it.developerOnly || devUnlocked }.forEach { d ->
                 val missed = d == Destination.PHONE && unseen > 0

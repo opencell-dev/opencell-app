@@ -219,9 +219,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setKeypadTones(on: Boolean) = keypadTones.set(on)
 
+    /** Any change to the number: the last refusal (ours or the terminal's) is about the old one, so it goes. */
     private fun edit(text: String) {
         dialInput = text
         dialError = null
+        if (phone.value.notice != null) phoneSession.clearNotice()
     }
 
     /** A key: its tone (if on), then the character. */

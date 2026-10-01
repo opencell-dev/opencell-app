@@ -11,13 +11,16 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -28,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -61,12 +65,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.max
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
@@ -183,10 +191,15 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
         val area = Modifier.fillMaxSize().padding(padding)
         when {
             stage != PhoneStage.HOME && log.isEmpty() -> main(area)
-            isWide() -> Row(area) {
-                recents(Modifier.weight(1f))
-                VerticalDivider()
-                main(Modifier.width(420.dp))
+            isWide() -> BoxWithConstraints(area) {
+                // A short window (the cover screen sideways) gives the keypad page more width,
+                // so the number fits beside the keys.
+                val page = if (maxHeight < 480.dp) (maxWidth * 0.6f).coerceIn(420.dp, 560.dp) else 420.dp
+                Row(Modifier.fillMaxSize()) {
+                    recents(Modifier.weight(1f))
+                    VerticalDivider()
+                    main(Modifier.width(page))
+                }
             }
             else -> Column(area) {
                 PhoneTabs(vm.phonePage, unseen, onSelect = { vm.phonePage = it })
@@ -277,31 +290,135 @@ private fun SetupPage(
     }
 }
 
-/** The registered home: the line card, what the phone needs to ring, then the keypad. */
+/**
+ * The registered home: the line card, what the phone needs to ring, then the
+ * keypad. The keypad always gets the height it needs ([KeypadMetrics]): when
+ * the full cards don't fit above it they collapse to one-line versions, and
+ * whatever is left for them scrolls on its own, never the keypad. A window too
+ * short for the keypad's column (the cover screen sideways) gets it side by side.
+ */
 @Composable
 private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
-    Column(modifier.fillMaxSize()) {
-        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            LineCard(vm, phone)
-            CallReadiness(vm)
-            phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
+    val m = keypadMetrics()
+    val readiness = readinessNotice(vm)
+    val full = fullHeaderHeight(phone, readiness != null)
+    val compact = compactHeaderHeight(phone, readiness != null)
+    // Tapping the one-line version shows the full cards anyway, scrolling in the room they have.
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val layout = when {
+            maxHeight - m.columnMin >= compact -> KeypadLayout.COLUMN
+            else -> KeypadLayout.choose(maxWidth, maxHeight - compact, m)
         }
-        Keypad(
-            input = vm.dialInput,
-            hint = DialPad.hint(vm.dialInput, phone.number),
-            canDial = phone.canDial,
-            notice = vm.dialError,
-            actions = KeypadActions(
-                onKey = vm::press,
-                onPlus = vm::pressPlus,
-                onBackspace = vm::backspace,
-                onClear = vm::clearDial,
-                onPaste = vm::paste,
-                onCall = vm::dial,
-                onTestNumber = vm::dialNumber,
-            ),
-            modifier = Modifier.weight(1f),
-        )
+        val keypadMin = if (layout == KeypadLayout.SIDE) m.sideMin else m.columnMin
+        val room = maxHeight - keypadMin
+        val fits = room >= full
+        val header = when {
+            fits -> HeaderStyle.FULL
+            room < 40.dp -> HeaderStyle.NONE
+            expanded -> HeaderStyle.FULL
+            else -> HeaderStyle.COMPACT
+        }
+        Column(Modifier.fillMaxSize()) {
+            if (header != HeaderStyle.NONE) {
+                Column(
+                    Modifier
+                        .heightIn(max = room)
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 16.dp, end = 16.dp, top = if (header == HeaderStyle.FULL) 12.dp else 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (header == HeaderStyle.FULL) 8.dp else 0.dp),
+                ) {
+                    if (header == HeaderStyle.FULL) {
+                        LineCard(vm, phone, onCollapse = if (fits) null else ({ expanded = false }))
+                    } else {
+                        CompactLine(phone, onExpand = { expanded = true })
+                    }
+                    readiness?.let { if (header == HeaderStyle.FULL) it.Card() else it.Line() }
+                    phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
+                }
+            }
+            Keypad(
+                input = vm.dialInput,
+                hint = DialPad.hint(vm.dialInput, phone.number),
+                canDial = phone.canDial,
+                notice = vm.dialError ?: phone.notice.takeIf { header == HeaderStyle.NONE },
+                actions = KeypadActions(
+                    onKey = vm::press,
+                    onPlus = vm::pressPlus,
+                    onBackspace = vm::backspace,
+                    onClear = vm::clearDial,
+                    onPaste = vm::paste,
+                    onCall = vm::dial,
+                    onTestNumber = vm::dialNumber,
+                ),
+                modifier = Modifier.weight(1f),
+                layout = layout,
+            )
+        }
+    }
+}
+
+private enum class HeaderStyle { FULL, COMPACT, NONE }
+
+/** About how tall the full line card, readiness card and notice are, at the current font size. */
+@Composable
+private fun fullHeaderHeight(phone: PhoneState, readiness: Boolean): Dp {
+    val t = MaterialTheme.typography
+    return with(LocalDensity.current) {
+        val body = t.bodyMedium.lineHeight.toDp()
+        var h = 12.dp + 24.dp + t.titleSmall.lineHeight.toDp() + t.headlineSmall.lineHeight.toDp() +
+            t.titleMedium.lineHeight.toDp() + body * 3 + 8.dp
+        if (phone.regFailureCode != null) h += body * 2
+        if (readiness) h += 8.dp + 32.dp + 16.dp + t.titleMedium.lineHeight.toDp() + body * 3 + 48.dp
+        if (phone.notice != null) h += 8.dp + max(48.dp, body * 2)
+        h
+    }
+}
+
+/** About how tall the one-line versions are. */
+@Composable
+private fun compactHeaderHeight(phone: PhoneState, readiness: Boolean): Dp {
+    val t = MaterialTheme.typography
+    return with(LocalDensity.current) {
+        var h = 4.dp + t.titleMedium.lineHeight.toDp() + t.bodySmall.lineHeight.toDp() + 8.dp
+        if (readiness) h += max(48.dp, t.bodyMedium.lineHeight.toDp() * 2)
+        if (phone.notice != null) h += max(48.dp, t.bodyMedium.lineHeight.toDp() * 2)
+        h
+    }
+}
+
+/** The line card in one line: the number, then the registration state (and a failure, if any). A tap shows the whole card. */
+@Composable
+private fun CompactLine(phone: PhoneState, onExpand: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = "Show the line details", onClick = onExpand).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Your number", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    phone.number?.let { PhoneNumber.display(it) } ?: "Not known yet",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val failed = phone.regFailureCode != null
+            Text(
+                listOfNotNull(phone.sig?.label ?: "–", phone.mode?.label, "registration failed, retrying".takeIf { failed }).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    failed -> MaterialTheme.colorScheme.error
+                    phone.sig == SigState.REGISTERED -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -450,10 +567,11 @@ private fun ConfirmCode(code: ActivationQr, onActivate: () -> Unit, onCancel: ()
 
 /** Your number, the registration state, the mode and the link. */
 @Composable
-private fun LineCard(vm: MainViewModel, phone: PhoneState) {
+private fun LineCard(vm: MainViewModel, phone: PhoneState, onCollapse: (() -> Unit)? = null) {
     val status by vm.status.collectAsStateWithLifecycle()
     val link by vm.linkState.collectAsStateWithLifecycle()
-    Card(Modifier.fillMaxWidth()) {
+    val tap = if (onCollapse != null) Modifier.clickable(onClickLabel = "Show less", onClick = onCollapse) else Modifier
+    Card(Modifier.fillMaxWidth().then(tap)) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text("Your number", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             Text(phone.number?.let { PhoneNumber.display(it) } ?: "Not known yet", style = MaterialTheme.typography.headlineSmall)
@@ -484,9 +602,30 @@ private fun RegistrationFailure(phone: PhoneState) {
     )
 }
 
-/** What the phone needs to ring for incoming calls while the app is in the background. */
+/** Something the phone needs before it can ring in the background: as a card, or as one line with the same action. */
+private class ReadinessNotice(val title: String, val text: String, val onAllow: () -> Unit) {
+    @Composable
+    fun Card() = NoticeCard(title = title, text = text, action = "Allow", onAction = onAllow)
+
+    @Composable
+    fun Line() {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            TextButton(onClick = onAllow) { Text("Allow") }
+        }
+    }
+}
+
+/** What the phone needs to ring for incoming calls while the app is in the background, if anything. */
 @Composable
-private fun CallReadiness(vm: MainViewModel) {
+private fun readinessNotice(vm: MainViewModel): ReadinessNotice? {
     val env = vm.environment
     val context = LocalContext.current
     var requestedNotifications by rememberSaveable { mutableStateOf(false) }
@@ -494,12 +633,11 @@ private fun CallReadiness(vm: MainViewModel) {
         requestedNotifications = true
         vm.refreshEnvironment()
     }
-    if (!env.notificationsAllowed) {
-        NoticeCard(
+    return if (!env.notificationsAllowed) {
+        ReadinessNotice(
             title = "Notifications are off",
             text = "Without them the phone can't ring for incoming calls while the app is in the background.",
-            action = "Allow",
-            onAction = {
+            onAllow = {
                 val activity = context.findActivity()
                 // Below 13 there's no runtime permission to ask for; with the permission already
                 // granted, notifications (or the calls channel) are blocked in Settings; and a denial
@@ -522,11 +660,10 @@ private fun CallReadiness(vm: MainViewModel) {
             },
         )
     } else if (!env.fullScreenCalls && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        NoticeCard(
+        ReadinessNotice(
             title = "Incoming calls on the lock screen",
             text = "Allow OpenCell to show incoming calls full screen. Otherwise they only show as a notification.",
-            action = "Allow",
-            onAction = {
+            onAllow = {
                 try {
                     context.startActivity(
                         Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, "package:${context.packageName}".toUri()),
@@ -538,6 +675,8 @@ private fun CallReadiness(vm: MainViewModel) {
                 }
             },
         )
+    } else {
+        null
     }
 }
 

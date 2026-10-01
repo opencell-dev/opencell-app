@@ -71,6 +71,9 @@ class PhoneFlowTest {
         compose.onNodeWithText("Activate").performClick()
         compose.waitForText("Your number")
         compose.onNodeWithText("+883-1-606-555-01234").assertExists()
+        // With the readiness card showing, the line card is one line above the keypad: a tap shows it all.
+        compose.onNodeWithText("Your number").performClick()
+        compose.waitForText("Mode")
         compose.onNodeWithText("Registered").assertExists()
         compose.onNodeWithText("Part 15 · Signalling and voice encrypted", substring = true).assertExists()
     }
