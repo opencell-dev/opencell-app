@@ -101,9 +101,10 @@ class AppSmokeTest {
     }
 
     /**
-     * Same media gate as above: outside a call, the demo terminal (Part 15)
-     * refuses every loopback probe. The loopback tab only works against a
-     * Part 97 cell (docs/ios-app-handoff.md §3.5).
+     * Same media gate as above: outside a call, the demo terminal refuses
+     * every loopback probe. Decision #25 (2026-10-01): this is now true in
+     * every mode, not just Part 15 - the Part 97 out-of-call diagnostic
+     * loopback is gone (docs/ios-app-handoff.md §3.5).
      */
     @Test
     @Config(qualifiers = "w884dp-h824dp")
