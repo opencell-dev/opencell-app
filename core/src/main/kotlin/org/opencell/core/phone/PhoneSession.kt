@@ -284,11 +284,16 @@ class PhoneSession(
     /**
      * The link came up for [address]. If it's a different terminal than the
      * one this session last talked to, everything here (state and in-call
-     * data) is reset first: nothing about terminal A may carry over to B.
+     * data) is reset first: nothing about terminal A may carry over to B. A
+     * call still active with A is closed first, like [PhoneInput.LinkClosed].
      * Either way, [resync] then reads STATUS fresh for whichever terminal it is.
      */
     private suspend fun onConnected(address: String) {
         if (lastAddress != null && lastAddress != address) {
+            // A call with the old terminal is over as far as this phone can tell (nothing about it
+            // will arrive again): end it through the reducer, so the call log gets it once, with
+            // its own voice counters, before everything is forgotten.
+            if (_state.value.activeCall != null) apply(PhoneInput.LinkClosed)
             synchronized(lock) {
                 dataJob?.cancel()
                 dataJob = null

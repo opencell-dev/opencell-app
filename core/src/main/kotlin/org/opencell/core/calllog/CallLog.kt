@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.opencell.core.phone.FinishedCall
 import org.opencell.core.voice.VoiceCounters
+import java.util.logging.Logger
 
 /** Where the call log's text lives between runs (Android: the app's preferences). Null: no log yet. */
 interface CallLogStore {
@@ -27,10 +28,18 @@ interface CallLogStore {
  * newest first, at most [cap] (the oldest go first). Local only: it lives in
  * [store] and is never sent anywhere. Each change is written through at once.
  * [unseenMissed] counts missed calls not yet looked at in Recents (the badge).
+ *
+ * A log a later version of the app wrote ([CallLogCodec.isNewerVersion], read
+ * after a downgrade) is left exactly as stored: this run starts empty, keeps
+ * its calls in memory only, and never writes, so upgrading again finds it whole.
  */
 class CallLog(private val store: CallLogStore = CallLogStore.inMemory(), private val cap: Int = MAX_ENTRIES) {
     private val lock = Any()
-    private val _entries = MutableStateFlow(CallLogCodec.decode(store.read()).take(cap))
+    private val stored = store.read()
+    private val readOnly = CallLogCodec.isNewerVersion(stored).also {
+        if (it) log.warning("call log written by a newer app version (${stored?.substringBefore('\n')}): kept as stored, not written this run")
+    }
+    private val _entries = MutableStateFlow(CallLogCodec.decode(stored).take(cap))
     val entries: StateFlow<List<CallLogEntry>> = _entries.asStateFlow()
 
     private val _unseenMissed = MutableStateFlow(unseen(_entries.value))
@@ -60,7 +69,7 @@ class CallLog(private val store: CallLogStore = CallLogStore.inMemory(), private
     }
 
     private fun publish(list: List<CallLogEntry>) {
-        store.write(if (list.isEmpty()) null else CallLogCodec.encode(list))
+        if (!readOnly) store.write(if (list.isEmpty()) null else CallLogCodec.encode(list))
         _entries.value = list
         _unseenMissed.value = unseen(list)
     }
@@ -69,5 +78,6 @@ class CallLog(private val store: CallLogStore = CallLogStore.inMemory(), private
 
     companion object {
         const val MAX_ENTRIES = 500
+        private val log = Logger.getLogger(CallLog::class.java.name)
     }
 }

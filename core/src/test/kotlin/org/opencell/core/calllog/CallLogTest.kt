@@ -143,4 +143,49 @@ class CallLogTest {
         assertTrue(CallLogCodec.decode(null).isEmpty())
         assertTrue(CallLog(CallLogStore.inMemory("garbage")).entries.value.isEmpty())
     }
+
+    /** Two lines with one id (a damaged or edited store): the first (newest) is kept, so Recents' keys stay unique. */
+    @Test
+    fun duplicateIdsAreDroppedOnLoad() {
+        val text = "oc-calllog 1\n" +
+            "5\tOUTGOING\t+883160655500100\t3000\t-\t4000\t2\t-\t1\t-\n" +
+            "5\tMISSED\t-\t2000\t-\t2500\t-\t-\t0\t-\n" +
+            "3\tINCOMING\t-\t1000\t1100\t1500\t0\t1\t1\t-"
+        val decoded = CallLogCodec.decode(text)
+        assertEquals(listOf(5L, 3L), decoded.map { it.id })
+        assertEquals(CallKind.OUTGOING, decoded.first().kind)
+        val log = CallLog(CallLogStore.inMemory(text))
+        assertEquals(0, log.unseenMissed.value)
+        log.delete(5)
+        assertEquals(listOf(3L), log.entries.value.map { it.id })
+    }
+
+    /**
+     * A log written by a newer version (read after a downgrade) is left exactly as it is:
+     * this version shows nothing from it and never writes over it, so upgrading again finds it whole.
+     */
+    @Test
+    fun aNewerVersionsLogIsKeptUntouched() {
+        val newer = "oc-calllog 2\nsomething\tnewer"
+        val store = CallLogStore.inMemory(newer)
+        val log = CallLog(store)
+        assertTrue(log.entries.value.isEmpty())
+        log.record(outgoing(1_000), null)
+        log.record(incoming(2_000), null)
+        log.markMissedSeen()
+        log.delete(1)
+        log.clear()
+        assertEquals(newer, store.read())
+        log.record(outgoing(3_000), null)
+        assertEquals(1, log.entries.value.size) // still works for this run, in memory
+        assertEquals(newer, store.read())
+    }
+
+    /** Text that isn't a call log at all (no header) is replaced by the next change. */
+    @Test
+    fun garbageIsReplacedByTheNextChange() {
+        val store = CallLogStore.inMemory("garbage")
+        CallLog(store).record(outgoing(1_000), null)
+        assertTrue(store.read()!!.startsWith(CallLogCodec.HEADER + "\n"))
+    }
 }

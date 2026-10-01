@@ -47,12 +47,17 @@ object DialPad {
     fun backspace(input: String): String = input.dropLast(1)
 
     /**
-     * Pasted text as keypad input: a `tel:` prefix and every separator or letter
-     * dropped, any script's digits as 0-9, `+` kept only in front, `*` and `#`
-     * kept, cut at [MAX_LENGTH]. Paste replaces what was typed (there is no cursor).
+     * Pasted text as keypad input: a `tel:` prefix (percent-escapes decoded) and
+     * every separator or letter dropped, any script's digits as 0-9, `+` kept only
+     * in front, `*` and `#` kept, cut at [MAX_LENGTH]. It stops at an extension or
+     * a dialling pause (`ext`, `x`, `,`, `;`, `p`, `w`), so the digits after it
+     * can't turn into a different, valid number. Paste replaces what was typed
+     * (there is no cursor).
      */
     fun fromPaste(text: String): String {
-        val t = text.trim().let { if (it.startsWith("tel:", ignoreCase = true)) it.substring(4) else it }
+        var t = text.trim()
+        if (t.startsWith("tel:", ignoreCase = true)) t = PERCENT.replace(t.substring(4)) { it.groupValues[1].toInt(16).toChar().toString() }
+        EXTENSION.find(t)?.let { t = t.substring(0, it.range.first) }
         val sb = StringBuilder()
         for (c in t) {
             if (sb.length >= MAX_LENGTH) break
@@ -65,6 +70,11 @@ object DialPad {
         }
         return sb.toString()
     }
+
+    private val PERCENT = Regex("%([0-9A-Fa-f]{2})")
+
+    /** Where an extension or a pause starts: `,` `;`, or `ext`/`extension`/`x`/`p`/`w` (not inside a word) before a digit. */
+    private val EXTENSION = Regex("""[,;]|(?<![a-z])(?:extension|ext\.?|[xpw])(?=[\s.:=#]*[0-9])""", RegexOption.IGNORE_CASE)
 
     /**
      * [input] grouped for the display as it is typed, the way

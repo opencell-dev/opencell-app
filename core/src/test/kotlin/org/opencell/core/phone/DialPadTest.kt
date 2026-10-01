@@ -40,6 +40,27 @@ class DialPadTest {
         assertEquals("", DialPad.fromPaste("no digits"))
     }
 
+    /** Paste stops at an extension or a dialling pause, so the extra digits can't make a different, valid number. */
+    @Test
+    fun pasteStopsAtAnExtensionOrAPause() {
+        assertEquals("6065551235", DialPad.fromPaste("606-555-1235 ext 4"))
+        assertEquals("6065551235", DialPad.fromPaste("606-555-1235 ext. 4"))
+        assertEquals("6065551235", DialPad.fromPaste("606-555-1235 extension 12"))
+        assertEquals("6065551235", DialPad.fromPaste("606-555-1235 x4"))
+        assertEquals("6065551235", DialPad.fromPaste("6065551235X4"))
+        assertEquals("+883160655501234", DialPad.fromPaste("+883160655501234,,123"))
+        assertEquals("+883160655501234", DialPad.fromPaste("+883160655501234;123"))
+        assertEquals("+883160655501234", DialPad.fromPaste("+883160655501234p123"))
+        assertEquals("+883160655501234", DialPad.fromPaste("+883160655501234w123"))
+        assertEquals("+883160655501234", DialPad.fromPaste("tel:+883160655501234;ext=12"))
+        assertEquals("+883160655501234", DialPad.fromPaste("tel:%2B883160655501234"))
+        // Words that only contain those letters don't cut anything.
+        assertEquals("6065550100", DialPad.fromPaste("Phone: 606 555 0100"))
+        assertEquals("6065550100", DialPad.fromPaste("call now 606 555 0100"))
+        // The wrong number the extension used to make is no longer offered.
+        assertEquals("Dials +883-1-606-555-01235", DialPad.hint(DialPad.fromPaste("606-555-1235 ext 4"), me).text)
+    }
+
     @Test
     fun nationalNumbersGroupAsTheyAreTyped() {
         val typed = "60655501234"

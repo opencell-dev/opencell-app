@@ -101,4 +101,33 @@ class CallLogRecordingTest {
         assertTrue("sent ${e.voice?.sent}", e.voice!!.sent >= 46)
         r.session.disconnect()
     }
+
+    /**
+     * Connecting to another terminal mid-call: the phone won't hear about that call again, so it
+     * is logged then (end not seen), with its own voice counters, none of which carry into the
+     * next call the log records.
+     */
+    @Test
+    fun switchingTerminalsMidCallLogsTheCallWithItsOwnCounters() = runTest {
+        val r = registered()
+        r.session.phone.dial(SimulatedTerminal.PEER)
+        advanceTimeBy(8_000) // connected about 4.6 s
+        r.session.connect(LinkTarget("OTHER-TERMINAL", "Another terminal"))
+        advanceTimeBy(2_000)
+        val first = r.log.entries.value.single()
+        assertEquals(CallKind.OUTGOING, first.kind)
+        assertEquals(SimulatedTerminal.PEER, first.number)
+        assertNull(first.causeCode)
+        val firstSent = first.voice!!.sent
+        assertTrue("sent $firstSent", firstSent >= 30)
+        // The demo terminal answers on the new address too and is still in the call: a new one for the phone.
+        advanceTimeBy(2_000)
+        r.session.phone.hangup()
+        advanceTimeBy(2_000)
+        val (second, again) = r.log.entries.value
+        assertEquals(first, again)
+        assertEquals(CallKind.UNKNOWN, second.kind)
+        assertTrue("second sent ${second.voice?.sent}, first $firstSent", second.voice!!.sent < firstSent)
+        r.session.disconnect()
+    }
 }

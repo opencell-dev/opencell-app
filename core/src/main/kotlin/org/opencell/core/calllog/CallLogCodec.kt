@@ -10,12 +10,26 @@ import org.opencell.core.voice.VoiceCounters
  * `id  kind  number  startedAt  connectedAt  endedAt  cause  codec  seen(0/1)  sent,notSent,received,concealed`
  *
  * Numbers hold only `+` and digits, so nothing needs escaping. [decode] skips
- * a line it can't read rather than losing the whole log, and returns nothing
- * for a header it doesn't know (a later version's log, after a downgrade).
+ * a line it can't read rather than losing the whole log, keeps only the first
+ * (newest) line of an id that repeats, and returns nothing for a header it
+ * doesn't know (a later version's log, after a downgrade: see [isNewerVersion]).
  */
 object CallLogCodec {
     const val HEADER = "oc-calllog 1"
     private val NUMBER = Regex("""\+?[0-9]{1,18}""")
+    private val ANY_HEADER = Regex("""oc-calllog ([0-9]{1,9})""")
+    private const val VERSION = 1
+
+    /**
+     * True when [text] is a call log written by a later version of the app (a
+     * header `oc-calllog N` with N above this one's): it can't be read here, and
+     * must not be written over either, so upgrading again finds it whole.
+     */
+    fun isNewerVersion(text: String?): Boolean {
+        val first = text?.substringBefore('\n') ?: return false
+        val v = ANY_HEADER.matchEntire(first)?.groupValues?.get(1)?.toIntOrNull() ?: return false
+        return v > VERSION
+    }
 
     fun encode(entries: List<CallLogEntry>): String = buildString {
         append(HEADER)
@@ -42,7 +56,7 @@ object CallLogCodec {
         if (text == null) return emptyList()
         val lines = text.split('\n')
         if (lines.first() != HEADER) return emptyList()
-        return lines.drop(1).mapNotNull(::line)
+        return lines.drop(1).mapNotNull(::line).distinctBy { it.id }
     }
 
     private fun line(l: String): CallLogEntry? {
