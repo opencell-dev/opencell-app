@@ -87,6 +87,12 @@ data class PhoneState(
     val callChangedAt: Long = NEVER,
     /** A one-line message for the user: a refused command, a bad number. */
     val notice: String? = null,
+    /**
+     * Counts the calls the reducer has created: a new [call] (dialled, incoming, or one STATUS
+     * shows that the app didn't know) gets the next value, while a change to the same call keeps it.
+     * [CallTracker] uses it to tell "the call moved on" from "a different call".
+     */
+    val callSerial: Long = 0,
 ) {
     val regFailure: RegFailReason? get() = regFailureCode?.let { RegFailReason.fromCode(it) }
     val activeCall: Call? get() = call?.takeIf { it.phase.active }
@@ -215,6 +221,7 @@ object PhoneReducer {
         is PhoneInput.Dialled -> s.copy(
             sig = SigState.CALLING,
             call = Call(null, Direction.OUTGOING, input.number, CallPhase.CALLING),
+            callSerial = s.callSerial + 1,
             callChangedAt = now,
             notice = null,
         )
@@ -249,6 +256,7 @@ object PhoneReducer {
         is TerminalEvent.Incoming -> s.copy(
             sig = SigState.RINGING_IN,
             call = Call(e.callId, Direction.INCOMING, e.caller, CallPhase.INCOMING),
+            callSerial = s.callSerial + 1,
             callChangedAt = now,
         )
         is TerminalEvent.Ringing -> {
@@ -256,6 +264,7 @@ object PhoneReducer {
             s.copy(
                 sig = SigState.RINGING_OUT,
                 call = c?.copy(id = e.callId, phase = CallPhase.RINGING) ?: Call(e.callId, Direction.OUTGOING, null, CallPhase.RINGING),
+                callSerial = if (c == null) s.callSerial + 1 else s.callSerial,
                 callChangedAt = now,
             )
         }
@@ -265,6 +274,7 @@ object PhoneReducer {
                 sig = SigState.IN_CALL,
                 call = c?.copy(id = e.callId, phase = CallPhase.CONNECTED, answering = false, connectedAt = wallNow, codec = e.codec)
                     ?: Call(e.callId, null, null, CallPhase.CONNECTED, connectedAt = wallNow, codec = e.codec),
+                callSerial = if (c == null) s.callSerial + 1 else s.callSerial,
                 callChangedAt = now,
             )
         }
@@ -282,6 +292,7 @@ object PhoneReducer {
                         causeCode = e.causeCode,
                         answering = false,
                     ),
+                    callSerial = if (c == null) s.callSerial + 1 else s.callSerial,
                     callChangedAt = now,
                 )
             }
@@ -349,6 +360,7 @@ object PhoneReducer {
                     phase = phase,
                     connectedAt = if (phase == CallPhase.CONNECTED) wallNow else null,
                 ),
+                callSerial = s.callSerial + 1,
                 callChangedAt = now,
             )
         } else {
