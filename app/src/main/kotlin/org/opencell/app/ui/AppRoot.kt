@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowSizeClass
 import org.opencell.core.link.LinkState
+import org.opencell.core.phone.Direction
 
 enum class Destination(val label: String, val icon: ImageVector, val developerOnly: Boolean = false) {
     PHONE("Phone", Icons.Filled.Phone),
@@ -51,7 +52,9 @@ enum class Destination(val label: String, val icon: ImageVector, val developerOn
  * and a rail on the inner screen. Folding or unfolding only changes the
  * window size; the selected destination is saved and the link is untouched.
  * Phone is the subscriber's screen; Terminal, Console and Loopback are the
- * bring-up and diagnostics tools of v1.
+ * bring-up and diagnostics tools of v1. When the call screen opens for an
+ * outgoing call, the keypad's number is cleared: the terminal took it
+ * (dial-and-recents spec §2).
  */
 @Composable
 fun AppRoot(vm: MainViewModel) {
@@ -62,7 +65,11 @@ fun AppRoot(vm: MainViewModel) {
     // the Terminal tab's ⋮ menu is what opens it (DeveloperOptionsDialog's KDoc explains why
     // it isn't a platform AlertDialog).
     var showDeveloperDialog by rememberSaveable { mutableStateOf(false) }
-    if (phone.call != null) {
+    val inCall = phone.call != null
+    LaunchedEffect(inCall) {
+        if (inCall && vm.phone.value.call?.direction == Direction.OUTGOING) vm.clearDial()
+    }
+    if (inCall) {
         // Any call (ringing, connected or just ended) takes the whole screen, whatever tab is open.
         CallScreen(vm.phoneSession, vm.linkState, vm.callAudio, devUnlocked, onRetry = vm::connect)
         return

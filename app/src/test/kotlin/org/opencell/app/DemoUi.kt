@@ -3,14 +3,18 @@ package org.opencell.app
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.dev.DeveloperAccess
+import org.opencell.core.phone.DialPad
 
 /** Shared steps of the Robolectric UI tests, driving the app against the demo terminal. */
 typealias AppRule = AndroidComposeTestRule<*, MainActivity>
@@ -48,4 +52,21 @@ fun AppRule.activateDemo() {
     waitForText("Valid until")
     onNodeWithText("Activate").performClick()
     waitForText("Your number")
+}
+
+/** Types [number] on the keypad: digits, `*` and `#` by tapping, `+` by a long press on 0. */
+fun AppRule.typeOnKeypad(number: String) {
+    for (c in number) {
+        if (c == '+') {
+            onNodeWithContentDescription("0").performTouchInput { longClick() }
+        } else {
+            onNodeWithContentDescription(DialPad.spoken(c)).performClick()
+        }
+    }
+}
+
+/** Types [number] and presses Call. */
+fun AppRule.dialOnKeypad(number: String) {
+    typeOnKeypad(number)
+    onNodeWithContentDescription("Call").performClick()
 }

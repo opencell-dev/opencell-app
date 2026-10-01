@@ -17,6 +17,7 @@ import org.opencell.app.graph
 import org.opencell.app.service.CallNotifier
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.loopback.LoopbackConfig
+import org.opencell.core.phone.DialPad
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.GattContract
 import org.opencell.core.protocol.Hex
@@ -201,16 +202,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The user chose "Activate with a new code" on an activated terminal. */
     var reactivating by mutableStateOf(false)
 
+    /** What the keypad holds: `0-9 * #` and a leading `+` ([DialPad]). */
     var dialInput by mutableStateOf("")
         private set
+
+    /** Why the last Call didn't go out (the number changed under it); cleared by the next key. */
     var dialError by mutableStateOf<String?>(null)
         private set
 
-    /** As the user edits the dial field: a stale refusal from an earlier attempt must not hide the live hint. */
-    fun onDialInputChange(text: String) {
+    private val keypadTones = app.graph.keypadTones
+    private val keySound = app.graph.keySound
+    val keypadTonesOn = keypadTones.enabled
+
+    fun setKeypadTones(on: Boolean) = keypadTones.set(on)
+
+    private fun edit(text: String) {
         dialInput = text
         dialError = null
     }
+
+    /** A key: its tone (if on), then the character. */
+    fun press(key: Char) {
+        if (keypadTones.enabled.value) keySound.play(key)
+        edit(DialPad.press(dialInput, key))
+    }
+
+    /** A long press on 0. */
+    fun pressPlus() = edit(DialPad.press(dialInput, '+'))
+
+    fun backspace() = edit(DialPad.backspace(dialInput))
+
+    fun clearDial() = edit("")
+
+    /** Pasted text replaces the number (the keypad has no cursor). */
+    fun paste(text: String) = edit(DialPad.fromPaste(text))
+
 
     /** A scanned or pasted code, checked like the terminal checks it. Valid codes wait for [confirmActivation]. */
     fun onCode(text: String) {
@@ -256,7 +282,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         reactivating = false
     }
 
-    fun dial(number: String = dialInput) {
+    /** Call: the keypad's number. It stays on the keypad until the call screen opens (AppRoot clears it then). */
+    fun dial() {
+        dialError = phoneSession.dial(dialInput)
+    }
+
+    /** Calls [number] straight away: a test number, or Call back in Recents. */
+    fun dialNumber(number: String) {
         dialError = phoneSession.dial(number)
     }
 

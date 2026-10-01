@@ -28,14 +28,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -67,42 +65,51 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.app.audio.TonePlanSetting
-import org.opencell.app.ui.theme.CallGreen
 import org.opencell.app.ui.theme.MonoStyle
 import org.opencell.core.link.LinkState
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.phone.Activation
-import org.opencell.core.phone.PhoneSession
+import org.opencell.core.phone.DialPad
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.SigState
-import org.opencell.core.sim.SimulatedTerminal
 import org.opencell.core.voice.TonePlans
+
+/** Which of the Phone tab's screens shows: the setup states in order, then the dial screen once registered. */
+private enum class PhoneStage { CONNECT, WAITING, ACTIVATION_RESULT, ONBOARDING, HOME }
 
 /**
  * The Phone tab: what a subscriber sees. Picks one of: no terminal, waiting
  * for the terminal's state, activation result, activation (QR code), or the
- * registered home screen with the dialer.
+ * registered home: the line card and the keypad (dial-and-recents spec §2).
  */
 @Composable
 fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     val link by vm.linkState.collectAsStateWithLifecycle()
     val wanted by vm.wanted.collectAsStateWithLifecycle()
     val phone by vm.phone.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val tonesOn by vm.keypadTonesOn.collectAsStateWithLifecycle()
     // Saveable: folding or unfolding recreates the activity, and must not close these.
     var menu by rememberSaveable { mutableStateOf(false) }
     var confirmDeactivate by rememberSaveable { mutableStateOf(false) }
     var chooseTones by rememberSaveable { mutableStateOf(false) }
     val activated = phone.linkUp && phone.sig != null && phone.sig != SigState.NOT_ACTIVATED
+    val stage = when {
+        wanted == null && !link.isConnected -> PhoneStage.CONNECT
+        !phone.linkUp || phone.sig == null -> PhoneStage.WAITING
+        phone.activation != Activation.Idle -> PhoneStage.ACTIVATION_RESULT
+        phone.sig == SigState.NOT_ACTIVATED || vm.reactivating -> PhoneStage.ONBOARDING
+        else -> PhoneStage.HOME
+    }
+    val terminalMenu = activated && phone.activeCall == null
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("OpenCell") },
                 actions = {
-                    if (activated && phone.activeCall == null) {
+                    if (terminalMenu) {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
@@ -117,6 +124,11 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                                 text = { Text("Call tones") },
                                 onClick = { menu = false; chooseTones = true },
                             )
+                            DropdownMenuItem(
+                                text = { Text("Keypad tones") },
+                                trailingIcon = { Checkbox(checked = tonesOn, onCheckedChange = null) },
+                                onClick = { menu = false; vm.setKeypadTones(!tonesOn) },
+                            )
                         }
                     }
                 },
@@ -124,22 +136,11 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
         },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
-        Column(
-            Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            when {
-                wanted == null && !link.isConnected -> ConnectPrompt(vm, onOpenTerminal)
-                !phone.linkUp || phone.sig == null -> WaitingForTerminal(
-                    link,
-                    onRetry = vm::connect,
-                    onBluetoothSettings = { context.startActivity(bluetoothSettings()) },
-                )
-                phone.activation != Activation.Idle -> ActivationResult(vm, phone)
-                phone.sig == SigState.NOT_ACTIVATED || vm.reactivating -> Onboarding(vm, again = phone.sig != SigState.NOT_ACTIVATED)
-                else -> Home(vm, phone)
-            }
-            phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
+        val area = Modifier.fillMaxSize().padding(padding)
+        if (stage == PhoneStage.HOME) {
+            HomePage(vm, phone, area)
+        } else {
+            SetupPage(vm, stage, link, phone, onOpenTerminal, area)
         }
     }
 
@@ -159,6 +160,65 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                 TextButton(onClick = { confirmDeactivate = false; vm.deactivate() }) { Text("Deactivate") }
             },
             dismissButton = { TextButton(onClick = { confirmDeactivate = false }) { Text("Cancel") } },
+        )
+    }
+
+}
+
+/** Everything before the dial screen: connecting, waiting, activating. Scrolls. */
+@Composable
+private fun SetupPage(
+    vm: MainViewModel,
+    stage: PhoneStage,
+    link: LinkState,
+    phone: PhoneState,
+    onOpenTerminal: () -> Unit,
+    modifier: Modifier,
+) {
+    val context = LocalContext.current
+    Column(
+        modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        when (stage) {
+            PhoneStage.CONNECT -> ConnectPrompt(vm, onOpenTerminal)
+            PhoneStage.WAITING -> WaitingForTerminal(
+                link,
+                onRetry = vm::connect,
+                onBluetoothSettings = { context.startActivity(bluetoothSettings()) },
+            )
+            PhoneStage.ACTIVATION_RESULT -> ActivationResult(vm, phone)
+            PhoneStage.ONBOARDING -> Onboarding(vm, again = phone.sig != SigState.NOT_ACTIVATED)
+            PhoneStage.HOME -> Unit
+        }
+        phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
+    }
+}
+
+/** The registered home: the line card, what the phone needs to ring, then the keypad. */
+@Composable
+private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
+    Column(modifier.fillMaxSize()) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LineCard(vm, phone)
+            CallReadiness(vm)
+            phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
+        }
+        Keypad(
+            input = vm.dialInput,
+            hint = DialPad.hint(vm.dialInput, phone.number),
+            canDial = phone.canDial,
+            notice = vm.dialError,
+            actions = KeypadActions(
+                onKey = vm::press,
+                onPlus = vm::pressPlus,
+                onBackspace = vm::backspace,
+                onClear = vm::clearDial,
+                onPaste = vm::paste,
+                onCall = vm::dial,
+                onTestNumber = vm::dialNumber,
+            ),
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -306,14 +366,15 @@ private fun ConfirmCode(code: ActivationQr, onActivate: () -> Unit, onCancel: ()
     }
 }
 
+/** Your number, the registration state, the mode and the link. */
 @Composable
-private fun Home(vm: MainViewModel, phone: PhoneState) {
+private fun LineCard(vm: MainViewModel, phone: PhoneState) {
     val status by vm.status.collectAsStateWithLifecycle()
     val link by vm.linkState.collectAsStateWithLifecycle()
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text("Your number", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-            Text(phone.number?.let { PhoneNumber.display(it) } ?: "Not known yet", style = MaterialTheme.typography.headlineMedium)
+            Text(phone.number?.let { PhoneNumber.display(it) } ?: "Not known yet", style = MaterialTheme.typography.headlineSmall)
             Text(
                 phone.sig?.label ?: "–",
                 style = MaterialTheme.typography.titleMedium,
@@ -328,8 +389,6 @@ private fun Home(vm: MainViewModel, phone: PhoneState) {
             RegistrationFailure(phone)
         }
     }
-    Dialer(vm, enabled = phone.canDial, home = phone.number)
-    CallReadiness(vm)
 }
 
 /** The last REG_FAILED, while the terminal is still registering (it retries by itself). */
@@ -405,49 +464,6 @@ internal tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
-}
-
-@Composable
-private fun Dialer(vm: MainViewModel, enabled: Boolean, home: String?) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Make a call", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-            OutlinedTextField(
-                value = vm.dialInput,
-                onValueChange = vm::onDialInputChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Number (606-555-01234 or +883-1-…)") },
-                singleLine = true,
-                isError = vm.dialError != null,
-                supportingText = { Text(vm.dialError ?: PhoneSession.dialHint(vm.dialInput, home)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { if (enabled) vm.dial() }),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { vm.dial() },
-                    enabled = enabled && vm.dialInput.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = CallGreen),
-                ) {
-                    Icon(Icons.Filled.Call, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Call")
-                }
-                AssistChip(
-                    onClick = { vm.onDialInputChange(SimulatedTerminal.PEER); vm.dial(SimulatedTerminal.PEER) },
-                    label = { Text("Test peer") },
-                    enabled = enabled,
-                )
-            }
-            if (!enabled) {
-                Text(
-                    "Calls need the terminal registered.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
 }
 
 @Composable
