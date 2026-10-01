@@ -13,6 +13,10 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "0.2.0"
+        // Only the ABIs :codec2 builds (the phones and the emulator). AndroidX/CameraX also
+        // ship 32-bit libraries; without this a 32-bit device would install the app and then
+        // have no codec at the first call.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     buildTypes {
@@ -38,6 +42,9 @@ android {
                 // Robolectric pokes FileDescriptor internals on JDK 17+.
                 it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
                 it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED")
+                // The app graph uses the real Codec2: the host build of :codec2's native code.
+                it.dependsOn(":codec2:hostCodec2")
+                it.systemProperty("java.library.path", rootProject.layout.projectDirectory.dir("codec2/build/host-codec2").asFile.path)
             }
         }
     }
@@ -55,6 +62,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":codec2"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

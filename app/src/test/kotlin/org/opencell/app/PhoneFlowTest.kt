@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -16,6 +17,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.opencell.app.ui.LINE_TAG
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.link.PairingProblem
@@ -69,8 +71,11 @@ class PhoneFlowTest {
         compose.waitForText("Valid until")
         compose.onNodeWithText("+883-1-606-555-01234").assertExists()
         compose.onNodeWithText("Activate").performClick()
-        compose.waitForText("Your number")
+        compose.waitForHome()
         compose.onNodeWithText("+883-1-606-555-01234").assertExists()
+        // The line card is one line above the keypad by default: a tap shows it all.
+        compose.onNodeWithTag(LINE_TAG).performClick()
+        compose.waitForText("Mode")
         compose.onNodeWithText("Registered").assertExists()
         compose.onNodeWithText("Part 15 · Signalling and voice encrypted", substring = true).assertExists()
     }
@@ -88,14 +93,14 @@ class PhoneFlowTest {
         compose.connectDemoAndOpenPhone()
         val code = compose.activity.graph.simulator.demoQrText()
         activateWith(code)
-        compose.waitForText("Your number")
+        compose.waitForHome()
         compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("Activate with a new code").performClick()
         activateWith(code)
         compose.waitForText("Activation failed")
         compose.onNodeWithText("This code has already been used (token used)").assertExists()
         compose.onNodeWithText("Try another code").performClick()
-        compose.waitForText("Your number")
+        compose.waitForHome()
     }
 
     @Test
@@ -134,7 +139,7 @@ class PhoneFlowTest {
         compose.waitForText("Registration failed: No answer from the network")
         compose.onNodeWithText("Activated").assertExists()
         compose.onNodeWithText("Continue").performClick()
-        compose.waitForText("Your number")
+        compose.waitForHome()
     }
 
     /** Triage: POST_NOTIFICATIONS granted but notifications off: "Allow" goes straight to the app's notification settings. */

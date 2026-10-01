@@ -17,6 +17,7 @@ import org.opencell.app.graph
 import org.opencell.app.service.CallNotifier
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.loopback.LoopbackConfig
+import org.opencell.core.phone.DialPad
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.GattContract
 import org.opencell.core.protocol.Hex
@@ -38,6 +39,9 @@ data class Environment(
     /** Android 14+: the user allows full-screen incoming-call screens (USE_FULL_SCREEN_INTENT). */
     val fullScreenCalls: Boolean = true,
 )
+
+/** The Phone tab's two pages on a narrow screen; a wide one shows both side by side. */
+enum class PhonePage { KEYPAD, RECENTS }
 
 /** The console input parsed into bytes, or why it can't be sent. */
 data class ConsoleDraft(val bytes: ByteArray?, val error: String?) {
@@ -173,7 +177,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The phone side of the terminal; the call screen talks to it directly (it is shared with CallActivity). */
     val phoneSession = session.phone
+    val callAudio = app.graph.callAudio
+    val tonePlan = app.graph.tonePlan
     val phone = phoneSession.state
+
+    // --- developer options ---
+
+    private val developerAccess = app.graph.developerAccess
+    val devUnlocked = developerAccess.unlocked
+
+    /** True (and unlocked, remembered) if [code] is the developer code. */
+    fun unlockDeveloper(code: String): Boolean = developerAccess.tryUnlock(code)
+    fun lockDeveloper() = developerAccess.lock()
 
     /** True while connected (or connecting) to the demo terminal, which offers demo activation codes. */
     val isDemo: Boolean get() = (linkState.value.target ?: wanted.value)?.address == SimulatedTerminal.ADDRESS
@@ -190,16 +205,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The user chose "Activate with a new code" on an activated terminal. */
     var reactivating by mutableStateOf(false)
 
+    /** What the keypad holds: `0-9 * #` and a leading `+` ([DialPad]). */
     var dialInput by mutableStateOf("")
         private set
+
+    /** Why the last Call didn't go out (the number changed under it); cleared by the next key. */
     var dialError by mutableStateOf<String?>(null)
         private set
 
-    /** As the user edits the dial field: a stale refusal from an earlier attempt must not hide the live hint. */
-    fun onDialInputChange(text: String) {
+    private val keypadTones = app.graph.keypadTones
+    private val keySound = app.graph.keySound
+    val keypadTonesOn = keypadTones.enabled
+
+    fun setKeypadTones(on: Boolean) = keypadTones.set(on)
+
+    /** Any change to the number: the last refusal (ours or the terminal's) is about the old one, so it goes. */
+    private fun edit(text: String) {
         dialInput = text
         dialError = null
+        if (phone.value.notice != null) phoneSession.clearNotice()
     }
+
+    /** A key: its tone (if on), then the character. */
+    fun press(key: Char) {
+        if (keypadTones.enabled.value) keySound.play(key)
+        edit(DialPad.press(dialInput, key))
+    }
+
+    /** A long press on 0. */
+    fun pressPlus() = edit(DialPad.press(dialInput, '+'))
+
+    fun backspace() = edit(DialPad.backspace(dialInput))
+
+    fun clearDial() = edit("")
+
+    /** Pasted text replaces the number (the keypad has no cursor). */
+    fun paste(text: String) = edit(DialPad.fromPaste(text))
+
+    /** A number from Recents, put on the keypad to check before calling. */
+    fun putOnKeypad(number: String) {
+        edit(DialPad.fromPaste(number))
+        phonePage = PhonePage.KEYPAD
+    }
+
+    /** The Phone tab's page on a narrow screen. */
+    var phonePage by mutableStateOf(PhonePage.KEYPAD)
+
+    /** Set by [showRecents]; AppRoot switches to the Phone tab and clears it. */
+    var recentsRequested by mutableStateOf(false)
+
+    /** Opens the Phone tab on Recents (the missed-call notification, or a call just missed). */
+    fun showRecents() {
+        phonePage = PhonePage.RECENTS
+        recentsRequested = true
+    }
+
+    // --- call log ---
+
+    private val callLog = app.graph.callLog
+    val callLogEntries = callLog.entries
+    val unseenMissed = callLog.unseenMissed
+
+    fun deleteCall(id: Long) = callLog.delete(id)
+    fun clearCallLog() = callLog.clear()
+    fun markMissedSeen() = callLog.markMissedSeen()
 
     /** A scanned or pasted code, checked like the terminal checks it. Valid codes wait for [confirmActivation]. */
     fun onCode(text: String) {
@@ -245,7 +314,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         reactivating = false
     }
 
-    fun dial(number: String = dialInput) {
+    /** Call: the keypad's number. It stays on the keypad until the call screen opens (AppRoot clears it then). */
+    fun dial() {
+        dialError = phoneSession.dial(dialInput)
+    }
+
+    /** Dismisses the reason the last Call didn't go out. */
+    fun clearDialError() {
+        dialError = null
+    }
+
+    /** Calls [number] straight away: a test number, or Call back in Recents. */
+    fun dialNumber(number: String) {
         dialError = phoneSession.dial(number)
     }
 

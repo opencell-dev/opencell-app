@@ -17,6 +17,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.dev.DeveloperAccess
 import org.robolectric.annotation.Config
 
 /**
@@ -50,6 +51,9 @@ class AppSmokeTest {
     }
 
     private fun openDemoTerminal() {
+        // The demo terminal (and Console/Loopback below) are developer features: unlock
+        // directly rather than driving the code dialog in every test that needs them.
+        compose.activity.graph.developerAccess.tryUnlock(DeveloperAccess.CODE)
         openTerminalTab()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Demo terminal"))
         compose.onNodeWithText("Demo terminal").performClick()
@@ -79,28 +83,38 @@ class AppSmokeTest {
         compose.onNodeWithText("Terminals").assertExists()
     }
 
+    /**
+     * The demo terminal is Part 15 (the default). The media gate refuses UP
+     * with 0x80 anywhere outside a connected call in Part 15, so the console's
+     * quick HELLO write is refused rather than echoed back on DOWN.
+     */
     @Test
     @Config(qualifiers = "w411dp-h891dp")
-    fun consoleSendsAndLogsTheEcho() {
+    fun consoleUpIsRefusedOutsideACallOnTheDemoTerminal() {
         openDemoTerminal()
         waitForText("Granted")
         compose.onNodeWithText("Console").performClick()
         compose.onNodeWithText("HELLO").performClick()
-        waitForText("DOWN 5 B")
-        // Logged twice: the UP write and its DOWN echo.
-        compose.onAllNodesWithText("48 45 4c 4c 4f").assertCountEquals(2)
+        waitForText("not now (0x80)")
+        // Logged once: the UP write. No DOWN echo follows.
+        compose.onAllNodesWithText("48 45 4c 4c 4f").assertCountEquals(1)
     }
 
+    /**
+     * Same media gate as above: outside a call, the demo terminal refuses
+     * every loopback probe. Decision #25 (2026-10-01): this is now true in
+     * every mode, not just Part 15 - the Part 97 out-of-call diagnostic
+     * loopback is gone (docs/ios-app-handoff.md §3.5).
+     */
     @Test
     @Config(qualifiers = "w884dp-h824dp")
-    fun loopbackRunsAgainstTheDemoTerminal() {
+    fun loopbackIsRefusedOutsideACallOnTheDemoTerminal() {
         openDemoTerminal()
         waitForText("Granted")
         compose.onNodeWithText("Loopback").performClick()
-        compose.onNodeWithText("20").performTextReplacement("3")
-        compose.onNodeWithText("1000").performTextReplacement("300")
+        compose.onNodeWithText("20").performTextReplacement("1")
         compose.onNodeWithText("Start").performClick()
-        waitForText("Finished: 3 probes")
-        compose.onNodeWithText("3/3").assertExists()
+        waitForText("Finished: 1 probes")
+        compose.onNodeWithText("Refused").assertExists()
     }
 }

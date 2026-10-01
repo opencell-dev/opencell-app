@@ -156,6 +156,19 @@ object PhoneNumber {
     }
 
     /**
+     * The length of the country code at the start of [cc] (the digits after
+     * `883`, possibly only the first ones typed so far): 1 for 1 and 7, 2 for
+     * the ITU two-digit codes, 3 otherwise; null while too few digits are there to tell.
+     */
+    fun countryCodeLength(cc: String): Int? = when {
+        cc.isEmpty() -> null
+        cc[0] == '1' || cc[0] == '7' -> 1
+        cc.length < 2 -> null
+        cc.substring(0, 2) in CC2 -> 2
+        else -> 3
+    }
+
+    /**
      * For people: `+883-1-606-555-01234`, or `+883-44-2079460000` for a country
      * without a national plan (`oc_sig_number_format`). Anything that isn't a
      * valid number is shown unchanged.
@@ -163,11 +176,7 @@ object PhoneNumber {
     fun display(number: String): String {
         val d = number.removePrefix("+")
         if (!digitsOk(d)) return number
-        val ccLen = when {
-            d[3] == '1' || d[3] == '7' -> 1
-            d.substring(3, 5) in CC2 -> 2
-            else -> 3
-        }
+        val ccLen = countryCodeLength(d.substring(3))!!
         val cc = d.substring(3, 3 + ccLen)
         val national = d.substring(3 + ccLen)
         return if (cc == "1") {

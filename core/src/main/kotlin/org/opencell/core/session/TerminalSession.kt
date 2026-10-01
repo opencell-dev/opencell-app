@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.opencell.core.calllog.CallLog
 import org.opencell.core.link.Backoff
 import org.opencell.core.link.Connector
 import org.opencell.core.link.LinkManager
@@ -26,15 +27,24 @@ import org.opencell.core.phone.PhoneMemory
 import org.opencell.core.phone.PhoneSession
 import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalState
+import org.opencell.core.voice.AudioIo
+import org.opencell.core.voice.CallTonePlayer
+import org.opencell.core.voice.TonePlan
+import org.opencell.core.voice.TonePlans
+import org.opencell.core.voice.VoiceCodecFactory
+import org.opencell.core.voice.VoiceSession
+import org.opencell.core.voice.VoiceState
 import kotlin.time.TimeSource
 
 /**
  * Everything the app does with one terminal, independent of Android: the
  * link (with reconnects), UP sending with retries, the phone (activation,
- * registration, calls), the console log and the loopback test. The Android
- * layer only supplies a [Connector], a long-lived [scope] and a [PhoneMemory].
- *
- * The voice codec will sit next to [phone] and use [link] the same way.
+ * registration, calls), voice in connected calls, the console log and the
+ * loopback test. The Android layer only supplies a [Connector], a long-lived
+ * [scope], a [PhoneMemory] and, for voice, the codecs, the audio devices,
+ * whether the microphone may be used now ([micAllowed]) and the call progress
+ * tones' plan ([tonePlan]). Every call the phone sees goes into [callLog] when
+ * it ends, with its voice counters (dial-and-recents spec §4.1).
  */
 class TerminalSession(
     connector: Connector,
@@ -44,6 +54,11 @@ class TerminalSession(
     retryPolicy: RetryPolicy = RetryPolicy(),
     reconnect: Backoff = Backoff.RECONNECT,
     phoneMemory: PhoneMemory = PhoneMemory.inMemory(),
+    codecs: VoiceCodecFactory = VoiceCodecFactory.NONE,
+    audio: AudioIo = AudioIo.NONE,
+    micAllowed: StateFlow<Boolean> = MutableStateFlow(true),
+    tonePlan: StateFlow<TonePlan> = MutableStateFlow(TonePlans.NORTH_AMERICA),
+    val callLog: CallLog = CallLog(),
 ) {
     val link = LinkManager(connector, scope, reconnect, timeSource, wallClock)
     val sender = UplinkSender(link, retryPolicy)
@@ -53,6 +68,8 @@ class TerminalSession(
         link, sender, scope, phoneMemory, { kind, text -> console.add(kind, text) }, wallClock,
         monotonic = { started.elapsedNow().inWholeMilliseconds },
     )
+    val voice = VoiceSession(link, phone.state, codecs, audio, scope, micAllowed, timeSource)
+    val tones = CallTonePlayer(phone.state, tonePlan, audio, scope)
     private val runner = LoopbackRunner(link, sender, timeSource)
 
     private val _loopback = MutableStateFlow<LoopbackReport?>(null)
@@ -63,7 +80,14 @@ class TerminalSession(
 
     init {
         scope.launch {
-            link.downlink.collect { console.add(ConsoleKind.DOWN, "DOWN ${it.payload.size} B", it.payload, it.wallMillis) }
+            // The call state machine is the log's only source: the screens never write to it.
+            phone.finishedCalls.collect { call -> callLog.record(call, voice.takeCounters()) }
+        }
+        scope.launch {
+            link.downlink.collect {
+                // Voice is eight payloads a second: the console would hold nothing else.
+                if (voice.state.value !is VoiceState.On) console.add(ConsoleKind.DOWN, "DOWN ${it.payload.size} B", it.payload, it.wallMillis)
+            }
         }
         scope.launch {
             link.state.drop(1).collect { console.add(ConsoleKind.INFO, describe(it)) }

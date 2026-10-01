@@ -92,7 +92,16 @@ class PhoneReducerTest {
     @Test
     fun connectMaySkipRinging() {
         val s = run(registered, PhoneInput.Dialled(peer), ev(TerminalEvent.Connected(4, 1)))
-        assertEquals(Call(4, Direction.OUTGOING, peer, CallPhase.CONNECTED, connectedAt = 10_100), s.call)
+        assertEquals(Call(4, Direction.OUTGOING, peer, CallPhase.CONNECTED, connectedAt = 10_100, codec = 1), s.call)
+    }
+
+    @Test
+    fun connectedKeepsTheCodecAndAStatusOnlyCallHasNone() {
+        val s = run(registered, ev(TerminalEvent.Incoming(5, peer)), ev(TerminalEvent.Connected(5, 7)))
+        assertEquals(7, s.call?.codec)
+        val fromStatus = run(registered, PhoneInput.Resync(SigState.IN_CALL))
+        assertEquals(CallPhase.CONNECTED, fromStatus.call?.phase)
+        assertNull(fromStatus.call?.codec)
     }
 
     @Test

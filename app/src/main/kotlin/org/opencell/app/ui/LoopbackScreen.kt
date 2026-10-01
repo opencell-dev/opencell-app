@@ -42,6 +42,9 @@ import org.opencell.core.loopback.ProbeResult
 /**
  * The bench loopback test: N writes at a fixed interval, each echoed by a
  * test cell; latency from the accepted UP write to the DOWN notification.
+ * The out-of-call diagnostic path this exercised is gone (decision #25,
+ * 2026-10-01): UP is refused outside a connected call, in Part 15 and
+ * Part 97, so every probe sent outside a call is refused with 0x80.
  */
 @Composable
 fun LoopbackScreen(vm: MainViewModel) {
@@ -123,8 +126,10 @@ private fun LoopbackForm(vm: MainViewModel, running: Boolean, connected: Boolean
                 val probe = cfg.payloadFor(0)
                 Text("First probe: \"${probe.decodeToString()}\" (${probe.size} B)", style = MonoStyle)
                 Text(
-                    "Needs the terminal in GRANTED (UP is refused with 0x80 without a grant). " +
-                        "Outside a call that means a test cell (ocbench cell) that keeps it granted.",
+                    "The out-of-call diagnostic loopback is gone (decision #25, 2026-10-01): " +
+                        "UP is always refused with 0x80 outside a connected call, in Part 15 and " +
+                        "Part 97, even when the terminal holds a grant. This probe will only " +
+                        "succeed while a call is connected.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

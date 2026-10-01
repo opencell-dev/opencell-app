@@ -2,10 +2,13 @@ package org.opencell.core.phone
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -104,6 +107,16 @@ class PhoneSession(
 
     private val _callData = MutableStateFlow(CallData())
     val callData: StateFlow<CallData> = _callData.asStateFlow()
+
+    private val tracker = CallTracker()
+    private val _finishedCalls = Channel<FinishedCall>(Channel.UNLIMITED)
+
+    /**
+     * Each call once, when it stops being active ([CallTracker]): the call log's
+     * source. Buffered without limit until collected; meant for one collector
+     * ([org.opencell.core.session.TerminalSession]).
+     */
+    val finishedCalls: Flow<FinishedCall> = _finishedCalls.receiveAsFlow()
 
     /** The single scheduled [PhoneInput.Tick] for a STATUS held back by the grace, if any. */
     private var pendingTick: Job? = null
@@ -271,11 +284,16 @@ class PhoneSession(
     /**
      * The link came up for [address]. If it's a different terminal than the
      * one this session last talked to, everything here (state and in-call
-     * data) is reset first: nothing about terminal A may carry over to B.
+     * data) is reset first: nothing about terminal A may carry over to B. A
+     * call still active with A is closed first, like [PhoneInput.LinkClosed].
      * Either way, [resync] then reads STATUS fresh for whichever terminal it is.
      */
     private suspend fun onConnected(address: String) {
         if (lastAddress != null && lastAddress != address) {
+            // A call with the old terminal is over as far as this phone can tell (nothing about it
+            // will arrive again): end it through the reducer, so the call log gets it once, with
+            // its own voice counters, before everything is forgotten.
+            if (_state.value.activeCall != null) apply(PhoneInput.LinkClosed)
             synchronized(lock) {
                 dataJob?.cancel()
                 dataJob = null
@@ -310,8 +328,10 @@ class PhoneSession(
     private fun apply(input: PhoneInput) {
         synchronized(lock) {
             val before = _state.value
-            val after = PhoneReducer.reduce(before, input, monotonic(), clock())
+            val wall = clock()
+            val after = PhoneReducer.reduce(before, input, monotonic(), wall)
             _state.value = after
+            tracker.step(before, input, after, wall)?.let { _finishedCalls.trySend(it) }
             if (before.call?.phase != CallPhase.CONNECTED && after.call?.phase == CallPhase.CONNECTED) _callData.value = CallData()
             if (dataJob != null && (after.call?.phase != CallPhase.CONNECTED || !after.linkUp)) {
                 dataJob?.cancel()

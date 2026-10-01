@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,7 +25,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -33,16 +37,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowSizeClass
 import org.opencell.core.link.LinkState
+import org.opencell.core.phone.Direction
 
-enum class Destination(val label: String, val icon: ImageVector) {
+enum class Destination(val label: String, val icon: ImageVector, val developerOnly: Boolean = false) {
     PHONE("Phone", Icons.Filled.Phone),
     TERMINAL("Terminal", Icons.Filled.Settings),
-    CONSOLE("Console", Icons.AutoMirrored.Filled.Send),
-    LOOPBACK("Loopback", Icons.Filled.Refresh),
+    CONSOLE("Console", Icons.AutoMirrored.Filled.Send, developerOnly = true),
+    LOOPBACK("Loopback", Icons.Filled.Refresh, developerOnly = true),
 }
 
 /**
@@ -50,33 +57,85 @@ enum class Destination(val label: String, val icon: ImageVector) {
  * and a rail on the inner screen. Folding or unfolding only changes the
  * window size; the selected destination is saved and the link is untouched.
  * Phone is the subscriber's screen; Terminal, Console and Loopback are the
- * bring-up and diagnostics tools of v1.
+ * bring-up and diagnostics tools of v1. Phone's icon carries the count of
+ * missed calls not yet seen in Recents.
+ *
+ * Around a call (dial-and-recents spec §6): when the call screen opens for an
+ * outgoing call, the keypad's number is cleared (the terminal took it; Recents
+ * has it now). When the call screen goes away and a missed call is waiting to
+ * be seen, the Phone tab opens on Recents, as it does from the missed-call
+ * notification ([MainViewModel.showRecents]).
  */
 @Composable
 fun AppRoot(vm: MainViewModel) {
     var destination by rememberSaveable { mutableStateOf(Destination.PHONE) }
     val phone by vm.phone.collectAsStateWithLifecycle()
-    if (phone.call != null) {
+    val devUnlocked by vm.devUnlocked.collectAsStateWithLifecycle()
+    // Rendered as a sibling of the tab content below, so it overlays whichever tab is open;
+    // the Terminal tab's ⋮ menu is what opens it (DeveloperOptionsDialog's KDoc explains why
+    // it isn't a platform AlertDialog).
+    var showDeveloperDialog by rememberSaveable { mutableStateOf(false) }
+    val unseen by vm.unseenMissed.collectAsStateWithLifecycle()
+    val inCall = phone.call != null
+    var afterCall by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(inCall) {
+        if (inCall) {
+            afterCall = true
+            if (vm.phone.value.call?.direction == Direction.OUTGOING) vm.clearDial()
+        } else if (afterCall) {
+            afterCall = false
+            if (vm.unseenMissed.value > 0) vm.showRecents()
+        }
+    }
+    LaunchedEffect(vm.recentsRequested) {
+        if (vm.recentsRequested) {
+            destination = Destination.PHONE
+            vm.recentsRequested = false
+        }
+    }
+    if (inCall) {
         // Any call (ringing, connected or just ended) takes the whole screen, whatever tab is open.
-        CallScreen(vm.phoneSession, vm.linkState, onRetry = vm::connect)
+        CallScreen(vm.phoneSession, vm.linkState, vm.callAudio, devUnlocked, onRetry = vm::connect)
         return
     }
 
+    // Locking developer options while a developer-only tab is open falls back to Phone; shown
+    // is computed rather than waiting a frame for the effect, so the tab never flashes its content.
+    val shown = if (!devUnlocked && destination.developerOnly) Destination.PHONE else destination
+    // Keyed on the lock, and reading destination when it runs: an effect keyed on `shown` could
+    // write back a tab from an older frame over a newer change (showRecents in the same frame).
+    LaunchedEffect(devUnlocked) { if (!devUnlocked && destination.developerOnly) destination = Destination.PHONE }
+
     NavigationSuiteScaffold(
+        // A rail on any wide window, short ones included: the cover screen sideways is only
+        // about 411 dp high, and a bottom bar would take 80 of them from the keypad.
+        layoutType = if (isWide()) {
+            NavigationSuiteType.NavigationRail
+        } else {
+            NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(currentWindowAdaptiveInfoV2())
+        },
         navigationSuiteItems = {
-            Destination.entries.forEach { d ->
+            Destination.entries.filter { !it.developerOnly || devUnlocked }.forEach { d ->
+                val missed = d == Destination.PHONE && unseen > 0
                 item(
-                    selected = d == destination,
+                    selected = d == shown,
                     onClick = { destination = d },
                     icon = { Icon(d.icon, contentDescription = null) },
+                    // The item clears its icon's and badge's semantics: TalkBack hears the count as the item's state.
+                    modifier = if (missed) Modifier.semantics { stateDescription = missedCallsLabel(unseen) } else Modifier,
+                    badge = if (missed) ({ Badge { Text("$unseen") } }) else null,
                     label = { Text(d.label) },
                 )
             }
         },
     ) {
-        when (destination) {
+        when (shown) {
             Destination.PHONE -> PhoneScreen(vm, onOpenTerminal = { destination = Destination.TERMINAL })
-            Destination.TERMINAL -> TerminalListDetail(vm)
+            Destination.TERMINAL -> TerminalListDetail(
+                vm,
+                devUnlocked = devUnlocked,
+                onOpenDeveloperOptions = { showDeveloperDialog = true },
+            )
             Destination.CONSOLE -> WithStatusPanel(vm, onOpenTerminal = { destination = Destination.TERMINAL }) {
                 ConsoleScreen(vm)
             }
@@ -84,6 +143,15 @@ fun AppRoot(vm: MainViewModel) {
                 LoopbackScreen(vm)
             }
         }
+    }
+
+    if (showDeveloperDialog) {
+        DeveloperOptionsDialog(
+            unlocked = devUnlocked,
+            onUnlock = vm::unlockDeveloper,
+            onLock = vm::lockDeveloper,
+            onDismiss = { showDeveloperDialog = false },
+        )
     }
 }
 

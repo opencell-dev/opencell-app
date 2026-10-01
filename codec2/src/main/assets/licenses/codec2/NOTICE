@@ -1,0 +1,10 @@
+Codec 2 (the speech codec OpenCell uses in calls)
+
+Copyright David Rowe and the Codec 2 contributors.
+Licensed under the GNU Lesser General Public License version 2.1 (LGPL 2.1):
+the full text is in COPYING, next to this file.
+
+OpenCell uses it unmodified, built as its own shared library, libcodec2.so,
+which you may replace with a compatible build (LGPL 2.1 section 6(b)).
+Source: https://github.com/drowe67/codec2 at commit 310777b1c6f1af0bc7c72f5b32f80f6fd9136962;
+the exact files built are in the OpenCell app's source, codec2/src/main/cpp/codec2.

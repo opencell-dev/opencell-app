@@ -22,11 +22,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,7 +49,10 @@ import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneSca
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -68,7 +74,7 @@ import org.opencell.core.protocol.Tmid
  * Side by side on the inner screen; one at a time (with back) on the cover screen.
  */
 @Composable
-fun TerminalListDetail(vm: MainViewModel) {
+fun TerminalListDetail(vm: MainViewModel, devUnlocked: Boolean, onOpenDeveloperOptions: () -> Unit) {
     val navigator = rememberListDetailPaneScaffoldNavigator<Nothing>(
         scaffoldDirective = calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(currentWindowAdaptiveInfoV2()),
     )
@@ -77,7 +83,12 @@ fun TerminalListDetail(vm: MainViewModel) {
         navigator = navigator,
         listPane = {
             AnimatedPane {
-                DevicesPane(vm, onShowStatus = { scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail) } })
+                DevicesPane(
+                    vm,
+                    devUnlocked = devUnlocked,
+                    onOpenDeveloperOptions = onOpenDeveloperOptions,
+                    onShowStatus = { scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail) } },
+                )
             }
         },
         detailPane = {
@@ -96,12 +107,13 @@ fun TerminalListDetail(vm: MainViewModel) {
 }
 
 @Composable
-fun DevicesPane(vm: MainViewModel, onShowStatus: () -> Unit) {
+fun DevicesPane(vm: MainViewModel, devUnlocked: Boolean, onOpenDeveloperOptions: () -> Unit, onShowStatus: () -> Unit) {
     val scan by vm.scan.collectAsStateWithLifecycle()
     val state by vm.linkState.collectAsStateWithLifecycle()
     val wanted by vm.wanted.collectAsStateWithLifecycle()
     val env = vm.environment
     val context = LocalContext.current
+    var overflow by rememberSaveable { mutableStateOf(false) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         vm.refreshEnvironment()
     }
@@ -119,6 +131,13 @@ fun DevicesPane(vm: MainViewModel, onShowStatus: () -> Unit) {
                         TextButton(onClick = vm::stopScan) { Text("Stop") }
                     } else {
                         TextButton(onClick = vm::startScan, enabled = env.bluetoothPermission && env.bluetoothOn) { Text("Scan") }
+                    }
+                    IconButton(onClick = { overflow = true }) { Icon(Icons.Filled.MoreVert, "More") }
+                    DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Developer options") },
+                            onClick = { overflow = false; onOpenDeveloperOptions() },
+                        )
                     }
                 },
             )
@@ -206,16 +225,18 @@ fun DevicesPane(vm: MainViewModel, onShowStatus: () -> Unit) {
                     onShowStatus()
                 }
             }
-            item { HorizontalDivider() }
-            item {
-                ListItem(
-                    headlineContent = { Text("Demo terminal") },
-                    supportingContent = { Text("Simulated terminal and echoing cell, no hardware needed") },
-                    modifier = Modifier.clickable {
-                        vm.connectDemo()
-                        onShowStatus()
-                    },
-                )
+            if (devUnlocked) {
+                item { HorizontalDivider() }
+                item {
+                    ListItem(
+                        headlineContent = { Text("Demo terminal") },
+                        supportingContent = { Text("Simulated terminal and echoing cell, no hardware needed") },
+                        modifier = Modifier.clickable {
+                            vm.connectDemo()
+                            onShowStatus()
+                        },
+                    )
+                }
             }
             if (!env.batteryUnrestricted) {
                 item {

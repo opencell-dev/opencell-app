@@ -20,12 +20,18 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Ringing: vibrate() throws SecurityException without it. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Voice in calls: the microphone (asked when a call connects), the foreground
+         service's microphone type during a call, and the call's audio mode and route. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Lets the app open the system "allow unrestricted battery" dialog. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".OpenCellApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -66,6 +72,6 @@
         <service
             android:name=".service.LinkService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|microphone" />
     </application>
 </manifest>

@@ -58,7 +58,10 @@ object GattContract {
     const val DEACTIVATE_CONFIRM = 0xA5
 
     /**
-     * ATT 0x80. On UP: no grant, or the UL queue is full; retry later.
+     * ATT 0x80. On UP: no grant, or not in a connected call - refused in
+     * either mode even with a grant (the media gate: decision #25,
+     * 2026-10-01, there's no out-of-call path at all, Part 97's diagnostic
+     * loopback is gone) - or the UL queue is full; retry later.
      * On COMMAND: the terminal is not in the right state for it.
      */
     const val ATT_ERR_NOT_NOW = 0x80

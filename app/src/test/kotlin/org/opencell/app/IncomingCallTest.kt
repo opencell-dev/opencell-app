@@ -18,6 +18,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.service.CallActionReceiver
 import org.opencell.app.service.CallNotifier
+import org.opencell.app.service.MissedCallNotifier
+import org.opencell.app.ui.MainActivity
 import org.opencell.app.ui.CallActivity
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.phone.Call
@@ -203,5 +205,23 @@ class IncomingCallTest {
         assertFalse(activity.isFinishing)
         assertEquals(CallPhase.INCOMING, phone.state.value.call?.phase)
         controller.pause().stop().destroy()
+    }
+
+    /** A call nobody answered is logged and notified, silently, until Recents is seen (spec §6.2). */
+    @Test
+    fun anUnansweredCallIsLoggedAndNotifiedUntilSeen() {
+        app.graph.callLog.clear()
+        ringingDemoCall()
+        assertTrue(app.graph.simulator.peerHangup())
+        waitFor("logged") { app.graph.callLog.unseenMissed.value == 1 }
+        waitFor("notified") { shadowOf(nm).allNotifications.any { it.channelId == MissedCallNotifier.CHANNEL_ID } }
+        val posted = shadowOf(nm).allNotifications.single { it.channelId == MissedCallNotifier.CHANNEL_ID }
+        assertEquals("Missed call", posted.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals("Echo test (core 1)", posted.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        assertEquals(Notification.CATEGORY_MISSED_CALL, posted.category)
+        assertEquals(MainActivity.ACTION_SHOW_RECENTS, shadowOf(posted.contentIntent).savedIntent.action)
+        assertNull(nm.getNotificationChannel(MissedCallNotifier.CHANNEL_ID).sound)
+        app.graph.callLog.markMissedSeen()
+        waitFor("cleared") { shadowOf(nm).allNotifications.none { it.channelId == MissedCallNotifier.CHANNEL_ID } }
     }
 }
