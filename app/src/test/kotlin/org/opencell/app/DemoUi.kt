@@ -1,6 +1,7 @@
 package org.opencell.app
 
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.longClick
@@ -12,7 +13,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import org.opencell.app.ui.LINE_TAG
 import org.opencell.app.ui.MainActivity
+import org.opencell.app.ui.NUMBER_TAG
 import org.opencell.core.dev.DeveloperAccess
 import org.opencell.core.phone.DialPad
 
@@ -51,7 +54,17 @@ fun AppRule.activateDemo() {
     onNodeWithText("Use a demo code").performClick()
     waitForText("Valid until")
     onNodeWithText("Activate").performClick()
-    waitForText("Your number")
+    waitForHome()
+}
+
+/** Waits for the registered home: the line ([LINE_TAG], one line by default) or, when it is folded away, the keypad's number. */
+fun AppRule.waitForHome(timeoutMillis: Long = 10_000) {
+    try {
+        waitUntil(timeoutMillis) { onAllNodes(hasTestTag(LINE_TAG) or hasTestTag(NUMBER_TAG)).fetchSemanticsNodes().isNotEmpty() }
+    } catch (e: Throwable) {
+        println(onRoot(useUnmergedTree = false).printToString())
+        throw e
+    }
 }
 
 /** Types [number] on the keypad: digits, `*` and `#` by tapping, `+` by a long press on 0. */

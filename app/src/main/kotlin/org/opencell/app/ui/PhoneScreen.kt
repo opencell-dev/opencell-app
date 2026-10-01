@@ -25,7 +25,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
@@ -55,7 +57,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -89,6 +91,7 @@ import org.opencell.core.phone.DialPad
 import org.opencell.core.phone.PhoneState
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.PhoneNumber
+import org.opencell.core.protocol.RegMode
 import org.opencell.core.protocol.SigState
 import org.opencell.core.voice.TonePlans
 
@@ -127,12 +130,26 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     }
     val terminalMenu = activated && phone.activeCall == null
 
+    val tabbed = !(stage != PhoneStage.HOME && log.isEmpty()) && !isWide()
     Scaffold(
+        // No app bar: on the narrow screen the Keypad | Recents tabs are the top row (with ⋮), so
+        // the keypad gets the height; elsewhere a slim title row carries ⋮.
         topBar = {
-            TopAppBar(
-                title = { Text("OpenCell") },
-                actions = {
-                    if (terminalMenu || log.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (tabbed) {
+                    Box(Modifier.weight(1f)) { PhoneTabs(vm.phonePage, unseen, onSelect = { vm.phonePage = it }) }
+                } else {
+                    Text(
+                        "OpenCell",
+                        Modifier.weight(1f).padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                }
+                if (terminalMenu || log.isNotEmpty()) {
+                    Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             if (terminalMenu) {
@@ -162,8 +179,8 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                             }
                         }
                     }
-                },
-            )
+                }
+            }
         },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
@@ -203,7 +220,6 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                 }
             }
             else -> Column(area) {
-                PhoneTabs(vm.phonePage, unseen, onSelect = { vm.phonePage = it })
                 when (vm.phonePage) {
                     PhonePage.KEYPAD -> main(Modifier.weight(1f))
                     PhonePage.RECENTS -> {
@@ -312,9 +328,9 @@ private fun SetupPage(
 private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
     val m = keypadMetrics()
     val readiness = readinessNotice(vm)
-    val full = fullHeaderHeight(phone, readiness != null)
     val compact = compactHeaderHeight(phone, readiness != null)
-    // Tapping the one-line version shows the full cards anyway, scrolling in the room they have.
+    // The line card is one line by default; a tap shows the whole card (and the readiness card),
+    // scrolling in the room the keypad leaves, and a tap on that card folds it again.
     var expanded by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val layout = when {
@@ -323,9 +339,7 @@ private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
         }
         val keypadMin = if (layout == KeypadLayout.SIDE) m.sideMin else m.columnMin
         val room = maxHeight - keypadMin
-        val fits = room >= full
         val header = when {
-            fits -> HeaderStyle.FULL
             room < 40.dp -> HeaderStyle.NONE
             expanded -> HeaderStyle.FULL
             else -> HeaderStyle.COMPACT
@@ -340,9 +354,9 @@ private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
                     verticalArrangement = Arrangement.spacedBy(if (header == HeaderStyle.FULL) 8.dp else 0.dp),
                 ) {
                     if (header == HeaderStyle.FULL) {
-                        LineCard(vm, phone, onCollapse = if (fits) null else ({ expanded = false }))
+                        LineCard(vm, phone, onCollapse = { expanded = false })
                     } else {
-                        CompactLine(phone, onExpand = { expanded = true })
+                        CompactLine(vm, phone, onExpand = { expanded = true })
                     }
                     readiness?.let { if (header == HeaderStyle.FULL) it.Card() else it.Line() }
                     phone.notice?.let { NoticeLine(it, onDismiss = vm::clearNotice) }
@@ -371,67 +385,63 @@ private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
 
 private enum class HeaderStyle { FULL, COMPACT, NONE }
 
-/** About how tall the full line card, readiness card and notice are, at the current font size. */
-@Composable
-private fun fullHeaderHeight(phone: PhoneState, readiness: Boolean): Dp {
-    val t = MaterialTheme.typography
-    return with(LocalDensity.current) {
-        val body = t.bodyMedium.lineHeight.toDp()
-        var h = 12.dp + 24.dp + t.titleSmall.lineHeight.toDp() + t.headlineSmall.lineHeight.toDp() +
-            t.titleMedium.lineHeight.toDp() + body * 3 + 8.dp
-        if (phone.regFailureCode != null) h += body * 2
-        if (readiness) h += 8.dp + 32.dp + 16.dp + t.titleMedium.lineHeight.toDp() + body * 3 + 48.dp
-        if (phone.notice != null) h += 8.dp + max(48.dp, body * 2)
-        h
-    }
-}
-
 /** About how tall the one-line versions are. */
 @Composable
 private fun compactHeaderHeight(phone: PhoneState, readiness: Boolean): Dp {
     val t = MaterialTheme.typography
     return with(LocalDensity.current) {
-        var h = 4.dp + t.titleMedium.lineHeight.toDp() + t.bodySmall.lineHeight.toDp() + 8.dp
+        var h = 4.dp + max(40.dp, t.titleMedium.lineHeight.toDp() + 8.dp)
         if (readiness) h += max(48.dp, t.bodyMedium.lineHeight.toDp() * 2)
         if (phone.notice != null) h += max(48.dp, t.bodyMedium.lineHeight.toDp() * 2)
         h
     }
 }
 
-/** The line card in one line: the number, then the registration state (and a failure, if any). A tap shows the whole card. */
+/**
+ * The line card in one line: "+883-1-606-555-01234 · Registered · Part 15 🔒 · -73 dBm"
+ * (a registration failure instead, in the error colour). A tap shows the whole card.
+ */
 @Composable
-private fun CompactLine(phone: PhoneState, onExpand: () -> Unit) {
+private fun CompactLine(vm: MainViewModel, phone: PhoneState, onExpand: () -> Unit) {
+    val status by vm.status.collectAsStateWithLifecycle()
+    val failed = phone.regFailureCode != null
+    val details = listOfNotNull(
+        if (failed) "Registration failed" else phone.sig?.label ?: "–",
+        // Part 15 encrypts signalling and voice: the lock says so.
+        phone.mode?.let { if (it == RegMode.PART15) "${it.label} 🔒" else it.label },
+        status?.signalLabel,
+    ).joinToString(" · ")
     Row(
-        Modifier.fillMaxWidth().clickable(onClickLabel = "Show the line details", onClick = onExpand).padding(vertical = 4.dp),
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .clickable(onClickLabel = "Show the line details", onClick = onExpand)
+            .testTag(LINE_TAG),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Your number", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, maxLines = 1)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    phone.number?.let { PhoneNumber.display(it) } ?: "Not known yet",
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            val failed = phone.regFailureCode != null
-            Text(
-                listOfNotNull(phone.sig?.label ?: "–", phone.mode?.label, "registration failed, retrying".takeIf { failed }).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                color = when {
-                    failed -> MaterialTheme.colorScheme.error
-                    phone.sig == SigState.REGISTERED -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            phone.number?.let { PhoneNumber.display(it) } ?: "Number not known yet",
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+        )
+        Text(
+            " · $details",
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = when {
+                failed -> MaterialTheme.colorScheme.error
+                phone.sig == SigState.REGISTERED -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+/** The line, one line or the whole card: UI tests find the registered home by it. */
+const val LINE_TAG = "phone-line"
 
 @Composable
 private fun ConnectPrompt(vm: MainViewModel, onOpenTerminal: () -> Unit) {
@@ -582,7 +592,7 @@ private fun LineCard(vm: MainViewModel, phone: PhoneState, onCollapse: (() -> Un
     val status by vm.status.collectAsStateWithLifecycle()
     val link by vm.linkState.collectAsStateWithLifecycle()
     val tap = if (onCollapse != null) Modifier.clickable(onClickLabel = "Show less", onClick = onCollapse) else Modifier
-    Card(Modifier.fillMaxWidth().then(tap)) {
+    Card(Modifier.fillMaxWidth().then(tap).testTag(LINE_TAG)) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text("Your number", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             Text(phone.number?.let { PhoneNumber.display(it) } ?: "Not known yet", style = MaterialTheme.typography.headlineSmall)

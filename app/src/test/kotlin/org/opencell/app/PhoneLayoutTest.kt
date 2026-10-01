@@ -22,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.opencell.app.ui.LINE_TAG
 import org.opencell.app.ui.MainActivity
 import org.opencell.app.ui.NUMBER_TAG
 import org.opencell.core.phone.DialPad
@@ -56,7 +57,7 @@ class PhoneLayoutTest {
         if (qualifiers != null) {
             RuntimeEnvironment.setQualifiers(qualifiers)
             compose.activityRule.scenario.recreate()
-            compose.waitForText("Your number")
+            compose.waitForHome()
         }
         compose.typeOnKeypad("6065550") // so Delete shows
         compose.waitForIdle()
@@ -88,11 +89,27 @@ class PhoneLayoutTest {
         assertUsable(compose.onNodeWithContentDescription("Delete"), "Delete", seen)
     }
 
+    /**
+     * The cover screen upright, the everyday case: the keypad is the screen. It spans at least 80%
+     * of the width, its keys are at least 90 dp each way, Call about 80 dp, and it starts in the top third.
+     */
     @Test
     @Config(qualifiers = "w411dp-h891dp")
     fun coverUpright() {
         registeredHome()
         assertDialScreenUsable()
+        val root = compose.onRoot().getBoundsInRoot()
+        val one = compose.onNodeWithContentDescription("1").getBoundsInRoot()
+        val three = compose.onNodeWithContentDescription("3").getBoundsInRoot()
+        val width = root.right - root.left
+        assertTrue("keypad spans ${three.right - one.left} of $width", three.right - one.left >= width * 0.8f)
+        DialPad.KEYS.forEach {
+            val b = compose.onNodeWithContentDescription(DialPad.spoken(it)).getBoundsInRoot()
+            assertTrue("key $it is ${b.right - b.left}x${b.bottom - b.top}", b.right - b.left >= 90.dp && b.bottom - b.top >= 90.dp)
+        }
+        val call = compose.onNodeWithContentDescription("Call").getBoundsInRoot()
+        assertTrue("Call is ${call.right - call.left}", call.right - call.left >= 76.dp && call.bottom - call.top >= 76.dp)
+        assertTrue("the keys start at ${one.top} of ${root.bottom}", one.top < root.bottom / 3)
     }
 
     @Test
@@ -158,7 +175,7 @@ class PhoneLayoutTest {
     @Config(qualifiers = "w411dp-h891dp")
     fun theFullLineCardDoesNotPushTheKeypadOff() {
         registeredHome()
-        compose.onNodeWithText("Your number").performClick()
+        compose.onNodeWithTag(LINE_TAG).performClick()
         compose.waitForText("Mode")
         assertDialScreenUsable()
     }

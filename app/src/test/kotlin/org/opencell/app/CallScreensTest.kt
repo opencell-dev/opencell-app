@@ -21,6 +21,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.opencell.app.ui.LINE_TAG
 import org.opencell.app.ui.MainActivity
 import org.opencell.app.ui.NUMBER_TAG
 import org.opencell.core.link.PairingProblem
@@ -61,7 +62,7 @@ class CallScreensTest {
         compose.onNodeWithText("Hang up").performClick()
         compose.waitForText("Call ended")
         compose.onNodeWithText("Close").performClick()
-        compose.waitForText("Your number")
+        compose.waitForHome()
     }
 
     /** Call stays disabled for what can't be a number, and the line under it says why (spec §3.2). */
@@ -81,7 +82,7 @@ class CallScreensTest {
         compose.typeOnKeypad("911")
         compose.waitForText(PhoneSession.EMERGENCY) // the hint under the number, as typed
         compose.onNodeWithContentDescription("Call").assertIsNotEnabled()
-        compose.onNodeWithText("Your number").assertExists() // no call screen
+        compose.onNodeWithTag(LINE_TAG).assertExists() // no call screen
     }
 
     /** The line under the number follows the keys: the full form once it's a number, nothing while it could still become one. */
@@ -213,7 +214,7 @@ class CallScreensTest {
         compose.activateDemo()
         compose.typeOnKeypad("606555")
         compose.activityRule.scenario.recreate()
-        compose.waitForText("Your number")
+        compose.waitForHome()
         compose.onNodeWithTag(NUMBER_TAG).assertTextEquals("606-555")
     }
 }

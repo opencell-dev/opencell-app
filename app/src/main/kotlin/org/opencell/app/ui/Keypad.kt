@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
@@ -42,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -58,6 +61,8 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -93,16 +98,15 @@ class KeypadActions(
 class KeypadMetrics(
     val number: Dp,
     val hint: Dp,
-    val testNumbers: Dp,
 ) {
-    fun gridMin(side: Boolean): Dp = MIN_KEY * 4 + gap(side) * 3
+    fun gridMin(side: Boolean): Dp = MIN_KEY * 4 + rowGap(side) * 3
     fun callRow(side: Boolean): Dp = callSize(side) + 8.dp
 
-    /** The single column: number, hint, Test numbers, keys, Call. */
-    val columnMin: Dp get() = number + hint + testNumbers + SPACER + gridMin(false) + callRow(false) + PAD * 2
+    /** The single column: hint, number, keys, then Call (with Test numbers and Delete beside it). */
+    val columnMin: Dp get() = number + hint + gridMin(false) + callRow(false) + PAD * 2
 
-    /** Side by side: number, hint, Test numbers and Call on the left, the keys on the right. */
-    val sideMin: Dp get() = max(number + hint + testNumbers + callRow(true), gridMin(true)) + PAD * 2
+    /** Side by side: hint, number and Call on the left, the keys on the right. */
+    val sideMin: Dp get() = max(number + hint + callRow(true), gridMin(true)) + PAD * 2
 
     companion object {
         /** The least width for side by side: a left column wide enough for the longest number, and 48 dp keys. */
@@ -117,7 +121,6 @@ fun keypadMetrics(): KeypadMetrics {
         KeypadMetrics(
             number = max(56.dp, t.headlineSmall.lineHeight.toDp() + 8.dp),
             hint = t.bodyMedium.lineHeight.toDp() * 2,
-            testNumbers = max(48.dp, t.labelLarge.lineHeight.toDp() + 20.dp),
         )
     }
 }
@@ -134,15 +137,18 @@ enum class KeypadLayout {
 }
 
 /**
- * The dial screen (dial-and-recents spec §3): the number as typed, grouped;
- * the line saying what Call will dial; "Test numbers"; the 3 x 4 keypad; and
- * Call (enabled only for a number [DialPad.hint] accepts, while [canDial]) with
- * Delete beside it. Stateless: [input] and [hint] come from the caller.
+ * The dial screen (dial-and-recents spec §3): the line saying what Call will
+ * dial, the number as typed, grouped, right above the 3 x 4 keypad, and the
+ * Call row (Call, enabled only for a number [DialPad.hint] accepts while
+ * [canDial]; "Test numbers" to its left; Delete to its right). Stateless:
+ * [input] and [hint] come from the caller.
  *
- * Nothing scrolls: the text rows have fixed heights (from the font size) and
- * the keys take the rest, 48 dp (the touch minimum) to 80 dp. A window too
- * short for the column ([KeypadLayout.choose], or [layout] when the caller has
- * already chosen) puts the number, hint and Call beside the keys.
+ * The keypad is the screen: its three columns span [WIDTH_SHARE] of the width
+ * and its rows take the height left after the text rows (fixed, from the font
+ * size), so keys are as wide as the width allows and as tall as the height
+ * does, up to square, never under 48 dp. Nothing scrolls. A window too short
+ * for the column ([KeypadLayout.choose], or [layout] when the caller has
+ * already chosen) puts the hint, number and Call beside the keys.
  */
 @Composable
 fun Keypad(
@@ -158,39 +164,40 @@ fun Keypad(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val side = (layout ?: KeypadLayout.choose(maxWidth, maxHeight, m)) == KeypadLayout.SIDE
         if (side) {
-            val gap = m.gap(true)
-            val byHeight = (maxHeight - PAD * 2 - gap * 3) / 4
-            val byWidth = (maxWidth / 2 - 16.dp - gap * 2) / 3
-            val key = min(byHeight, byWidth).coerceIn(MIN_KEY, MAX_KEY)
+            val gapX = colGap(true)
+            val gapY = rowGap(true)
+            val keyW = ((maxWidth / 2 - 24.dp) * WIDTH_SHARE - gapX * 2) / 3
+            val keyH = min((maxHeight - PAD * 2 - gapY * 3) / 4, keyW)
             Row(
                 Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = PAD),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    NumberDisplay(input, m.number, actions)
                     HintLine(hint, canDial, notice, m.hint)
-                    TestNumbers(canDial, m.testNumbers, actions.onTestNumber)
+                    NumberDisplay(input, m.number, actions)
                     CallRow(input, hint, canDial, side = true, actions)
                 }
-                KeyGrid(key, gap, actions)
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    KeyGrid(keyW.coerceAtLeast(MIN_KEY), keyH.coerceIn(MIN_KEY, MAX_KEY), gapX, gapY, actions)
+                }
             }
         } else {
-            val gap = m.gap(false)
-            val fixed = m.number + m.hint + m.testNumbers + SPACER + m.callRow(false) + PAD * 2
-            val byHeight = (maxHeight - fixed - gap * 3) / 4
-            val byWidth = (maxWidth - 32.dp - gap * 2) / 3
-            val key = min(byHeight, byWidth).coerceIn(MIN_KEY, MAX_KEY)
+            val gapX = colGap(false)
+            val gapY = rowGap(false)
+            val fixed = m.number + m.hint + m.callRow(false) + PAD * 2
+            val keyW = ((maxWidth - 16.dp) * WIDTH_SHARE - gapX * 2) / 3
+            val keyH = min((maxHeight - fixed - gapY * 3) / 4, keyW)
             Column(
-                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = PAD),
+                Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = PAD),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                NumberDisplay(input, m.number, actions)
+                // Spare height (a key can't grow past square) goes above the text: the number stays
+                // right on top of the keys, and the keys and Call stay at the bottom, under the thumb.
+                Spacer(Modifier.weight(1f))
                 HintLine(hint, canDial, notice, m.hint)
-                TestNumbers(canDial, m.testNumbers, actions.onTestNumber)
-                // Spare height goes above the keys: they and Call stay at the bottom, under the thumb.
-                Spacer(Modifier.weight(1f).heightIn(min = SPACER))
-                KeyGrid(key, gap, actions)
+                NumberDisplay(input, m.number, actions)
+                KeyGrid(keyW.coerceAtLeast(MIN_KEY), keyH.coerceIn(MIN_KEY, MAX_KEY), gapX, gapY, actions)
                 CallRow(input, hint, canDial, side = false, actions)
             }
         }
@@ -198,14 +205,17 @@ fun Keypad(
 }
 
 private val MIN_KEY = 48.dp
-private val MAX_KEY = 80.dp
+private val MAX_KEY = 120.dp
 private val PAD = 8.dp
-private val SPACER = 8.dp
 
-private fun KeypadMetrics.gap(side: Boolean): Dp = if (side) 8.dp else 12.dp
+/** The share of the width the three columns of keys span. */
+private const val WIDTH_SHARE = 0.9f
 
-/** Call's diameter: 72 dp in the column, 56 dp beside the keys (never under the 48 dp minimum). */
-private fun callSize(side: Boolean): Dp = if (side) 56.dp else 72.dp
+private fun colGap(side: Boolean): Dp = if (side) 8.dp else 14.dp
+private fun rowGap(side: Boolean): Dp = if (side) 6.dp else 10.dp
+
+/** Call's diameter: 80 dp in the column, 56 dp beside the keys (never under the 48 dp minimum). */
+private fun callSize(side: Boolean): Dp = if (side) 56.dp else 80.dp
 
 /** Delete's square: 56 dp, 48 dp beside the keys. */
 private fun deleteSize(side: Boolean): Dp = if (side) 48.dp else 56.dp
@@ -307,12 +317,14 @@ private fun HintLine(hint: DialHint, canDial: Boolean, notice: String?, height: 
     )
 }
 
-/** The core test services ([ServiceNumbers]); choosing one calls it. */
+/** The core test services ([ServiceNumbers]), a small button beside Call; choosing one calls it. */
 @Composable
-private fun TestNumbers(canDial: Boolean, height: Dp, onTestNumber: (String) -> Unit) {
+private fun TestNumbers(canDial: Boolean, onTestNumber: (String) -> Unit, modifier: Modifier = Modifier) {
     var open by remember { mutableStateOf(false) }
-    Box(Modifier.height(height), contentAlignment = Alignment.Center) {
-        TextButton(onClick = { open = true }, enabled = canDial) { Text("Test numbers") }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        TextButton(onClick = { open = true }, enabled = canDial, contentPadding = PaddingValues(horizontal = 4.dp)) {
+            Text("Test numbers", style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center, maxLines = 2)
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             ServiceNumbers.ALL.forEach { s ->
                 DropdownMenuItem(
@@ -333,12 +345,12 @@ private fun TestNumbers(canDial: Boolean, height: Dp, onTestNumber: (String) -> 
 }
 
 @Composable
-private fun KeyGrid(key: Dp, gap: Dp, actions: KeypadActions) {
-    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+private fun KeyGrid(width: Dp, height: Dp, gapX: Dp, gapY: Dp, actions: KeypadActions) {
+    Column(verticalArrangement = Arrangement.spacedBy(gapY)) {
         DialPad.KEYS.chunked(3).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(gapX)) {
                 row.forEach { k ->
-                    DialKey(k, key, onPress = { actions.onKey(k) }, onLongPress = if (k == '0') actions.onPlus else null)
+                    DialKey(k, width, height, onPress = { actions.onKey(k) }, onLongPress = if (k == '0') actions.onPlus else null)
                 }
             }
         }
@@ -346,14 +358,15 @@ private fun KeyGrid(key: Dp, gap: Dp, actions: KeypadActions) {
 }
 
 /**
- * One key: the character, its letters under it, a haptic tick (the system's
- * touch feedback setting decides). TalkBack hears "5", "Star", "Pound"; 0
- * offers "Plus" as its long-press action. The character shrinks to fit the
- * key in large font; the letters show only when there is room for them.
+ * One key, [width] x [height] (a circle when square, rounded when wider): the
+ * character, its letters under it, a haptic tick (the system's touch feedback
+ * setting decides). TalkBack hears "5", "Star", "Pound"; 0 offers "Plus" as its
+ * long-press action. The character is 34 sp on a full-size key and shrinks to
+ * fit a small one or large font; the letters show when there is room.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DialKey(key: Char, size: Dp, onPress: () -> Unit, onLongPress: (() -> Unit)?) {
+private fun DialKey(key: Char, width: Dp, height: Dp, onPress: () -> Unit, onLongPress: (() -> Unit)?) {
     val view = LocalView.current
     val press = {
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -366,13 +379,14 @@ private fun DialKey(key: Char, size: Dp, onPress: () -> Unit, onLongPress: (() -
         }
     }
     val letters = DialPad.letters(key)
-    val showLetters = size >= 64.dp && LocalDensity.current.fontScale <= 1.3f
+    val showLetters = height >= 64.dp && LocalDensity.current.fontScale <= 1.5f
+    val shape = RoundedCornerShape(50)
     Surface(
-        shape = CircleShape,
+        shape = shape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
+            .size(width, height)
+            .clip(shape)
             .combinedClickable(onClick = press, onLongClick = long)
             .clearAndSetSemantics {
                 contentDescription = DialPad.spoken(key)
@@ -381,26 +395,40 @@ private fun DialKey(key: Char, size: Dp, onPress: () -> Unit, onLongPress: (() -
                 if (long != null) onLongClick(label = "Plus") { long(); true }
             },
     ) {
-        Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            val digit = MaterialTheme.typography.headlineMedium
+        Column(
+            Modifier.padding(vertical = 4.dp, horizontal = 8.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             BasicText(
                 key.toString(),
-                modifier = Modifier.heightIn(max = if (showLetters) size * 0.5f else size),
-                style = digit.copy(color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center),
+                style = TextStyle(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Normal,
+                    textAlign = TextAlign.Center,
+                ),
                 maxLines = 1,
-                autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = digit.fontSize),
+                autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 34.sp),
             )
             if (showLetters && (letters.isNotEmpty() || key in "123456789")) {
-                Text(letters, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                Text(
+                    // 1 has no letters: a blank line keeps its digit level with the others.
+                    letters.ifEmpty { " " },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
         }
     }
 }
 
 /**
- * Call in the middle, Delete (long press: clear) to its right, balanced by an
- * empty slot on the left. Both stay at or above the 48 dp touch minimum
- * ([callSize], [deleteSize]); Delete shows when there is something to delete.
+ * Call in the middle; "Test numbers" to its left and Delete (long press:
+ * clear) to its right, so nothing else takes a row of its own. Call and
+ * Delete stay at or above the 48 dp touch minimum ([callSize], [deleteSize]);
+ * Call stays green when off, only faded. Delete shows when there is something
+ * to delete.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -409,20 +437,24 @@ private fun CallRow(input: String, hint: DialHint, canDial: Boolean, side: Boole
     val call = callSize(side)
     val delete = deleteSize(side)
     Row(
-        Modifier.height(call + 8.dp),
+        Modifier.fillMaxWidth().height(call + 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(if (side) 16.dp else 24.dp),
     ) {
-        Spacer(Modifier.size(delete))
+        TestNumbers(canDial, actions.onTestNumber, Modifier.weight(1f))
         FilledIconButton(
             onClick = actions.onCall,
             enabled = canDial && hint.callable,
             modifier = Modifier.size(call),
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = CallGreen),
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = CallGreen,
+                contentColor = Color.White,
+                disabledContainerColor = CallGreen.copy(alpha = 0.3f),
+                disabledContentColor = Color.White.copy(alpha = 0.6f),
+            ),
         ) {
             Icon(Icons.Filled.Call, contentDescription = "Call", modifier = Modifier.size(call * 0.45f))
         }
-        Box(Modifier.size(delete), contentAlignment = Alignment.Center) {
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             if (input.isNotEmpty()) {
                 Box(
                     Modifier
