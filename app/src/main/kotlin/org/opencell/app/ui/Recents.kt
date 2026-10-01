@@ -4,6 +4,7 @@ import android.content.ClipData
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,25 +32,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import kotlinx.coroutines.launch
-import org.opencell.app.ui.theme.MonoStyle
-import org.opencell.core.calllog.CallKind
-import org.opencell.core.calllog.CallLogDisplay
-import org.opencell.core.calllog.CallLogEntry
-import org.opencell.core.protocol.PhoneNumber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import kotlinx.coroutines.launch
+import org.opencell.app.ui.theme.MonoStyle
+import org.opencell.core.calllog.CallKind
+import org.opencell.core.calllog.CallLogDisplay
+import org.opencell.core.calllog.CallLogEntry
+import org.opencell.core.protocol.PhoneNumber
 
 /** What a Recents row can do; the screen wires these to [MainViewModel]. */
 class RecentsActions(
@@ -131,15 +134,22 @@ private fun RecentRow(e: CallLogEntry, time: String, canDial: Boolean, devUnlock
     val number = e.number
     val title = CallLogDisplay.title(e)
     Box {
+        // A row without a number has nothing to put on the keypad: only its long press (the menu), so
+        // TalkBack doesn't offer a tap that does nothing.
+        val press = if (number != null) {
+            Modifier.combinedClickable(
+                onClick = { actions.onPutOnKeypad(number) },
+                onLongClick = { menu = true },
+                onClickLabel = "Put on the keypad",
+                onLongClickLabel = "More options",
+            )
+        } else {
+            Modifier
+                .pointerInput(Unit) { detectTapGestures(onLongPress = { menu = true }) }
+                .semantics { onLongClick(label = "More options") { menu = true; true } }
+        }
         ListItem(
-            modifier = Modifier
-                .combinedClickable(
-                    onClick = { if (number != null) actions.onPutOnKeypad(number) },
-                    onLongClick = { menu = true },
-                    onClickLabel = if (number != null) "Put on the keypad" else null,
-                    onLongClickLabel = "More options",
-                )
-                .semantics(mergeDescendants = true) { contentDescription = CallLogDisplay.spoken(e, time) },
+            modifier = press.semantics(mergeDescendants = true) { contentDescription = CallLogDisplay.spoken(e, time) },
             leadingContent = {
                 Icon(
                     kindIcon(e.kind),

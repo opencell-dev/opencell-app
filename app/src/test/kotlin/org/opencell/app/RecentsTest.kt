@@ -2,8 +2,10 @@ package org.opencell.app
 
 import android.content.ClipboardManager
 import android.content.Intent
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -155,6 +157,22 @@ class RecentsTest {
         compose.onNodeWithText("Delete").performClick()
         compose.onAllNodesWithText("Rejected").assertCountEquals(0)
         assertEquals(1, graph.callLog.entries.value.size)
+    }
+
+    /** A row without a number has nothing to put on the keypad: TalkBack offers only its long press (the menu). */
+    @Test
+    fun aRowWithoutANumberOffersOnlyItsMenu() {
+        seed(Direction.INCOMING, null, connected = false)
+        seed(Direction.OUTGOING, echo, connected = true)
+        compose.waitForText("No terminal connected")
+        openRecents()
+        compose.onNodeWithContentDescription("Missed call, Unknown caller", substring = true)
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnClick))
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick))
+            .performTouchInput { longClick() }
+        compose.onNodeWithText("Delete").assertExists()
+        compose.onNodeWithContentDescription("Outgoing call, Echo test (core 1)", substring = true)
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick))
     }
 
     @Test

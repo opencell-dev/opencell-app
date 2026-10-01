@@ -11,6 +11,9 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
@@ -154,6 +157,27 @@ class KeypadTest {
         compose.onNodeWithText("+883-1-503-555-00101").assertExists()
         compose.onNodeWithText("Echo test (core 1)").performClick()
         assertEquals(listOf("+883160655500100"), testNumbers)
+    }
+
+    /** The number has no tap action (TalkBack would offer one that does nothing), only the long press for its menu. */
+    @Test
+    fun theNumberOffersOnlyItsLongPress() {
+        show()
+        type("606")
+        compose.onNodeWithTag(NUMBER_TAG)
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnClick))
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick))
+            .performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithText("Paste").assertExists()
+    }
+
+    /** In large font every key keeps its 48 dp and stays a single, readable node. */
+    @Test
+    @Config(fontScale = 2.0f)
+    fun keysKeepTheirSizeInLargeFont() {
+        show()
+        DialPad.KEYS.forEach { compose.onNodeWithContentDescription(DialPad.spoken(it)).assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp) }
+        compose.onNodeWithContentDescription("Call").assertHeightIsAtLeast(48.dp)
     }
 
     @Test
