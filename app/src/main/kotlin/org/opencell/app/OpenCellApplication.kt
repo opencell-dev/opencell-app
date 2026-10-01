@@ -69,7 +69,7 @@ class AppGraph(
     )
     val callAudio = CallAudio(session.voice, route, MutableStateFlow(false), micAllowed)
     /** Posts and clears the missed-call notification from the log's unseen count. */
-    val missedCalls = MissedCallNotifier(context, callLog, scope)
+    val missedCalls = MissedCallNotifier(context, callLog, scope, prefs)
 
     val repository = TerminalRepository(
         context = context,

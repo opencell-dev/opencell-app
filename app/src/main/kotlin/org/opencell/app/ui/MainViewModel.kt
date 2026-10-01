@@ -319,6 +319,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         dialError = phoneSession.dial(dialInput)
     }
 
+    /** Dismisses the reason the last Call didn't go out. */
+    fun clearDialError() {
+        dialError = null
+    }
+
     /** Calls [number] straight away: a test number, or Call back in Recents. */
     fun dialNumber(number: String) {
         dialError = phoneSession.dial(number)

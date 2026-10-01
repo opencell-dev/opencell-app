@@ -30,6 +30,7 @@ import org.opencell.app.ui.missedCallsLabel
 import org.opencell.core.calllog.CallKind
 import org.opencell.core.phone.Direction
 import org.opencell.core.phone.FinishedCall
+import org.opencell.core.phone.PhoneSession
 import org.opencell.core.protocol.EndCause
 import org.opencell.core.sim.SimulatedTerminal
 import org.opencell.core.voice.VoiceCounters
@@ -128,6 +129,19 @@ class RecentsTest {
         compose.onNodeWithContentDescription("Call Echo test (core 1)").performClick()
         compose.waitForText("Outgoing call")
         compose.onNodeWithText("+883-1-606-555-00100").assertExists()
+    }
+
+    /** A call back that can't go out says why on Recents itself, not only on the Keypad page. */
+    @Test
+    fun aCallBackThatFailsSaysWhyOnRecents() {
+        seed(Direction.INCOMING, "+88312", connected = false)
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        openRecents()
+        compose.onNodeWithContentDescription("Call +88312").performClick()
+        compose.waitForText(PhoneSession.BAD_NUMBER)
+        compose.onNodeWithText("Dismiss").performClick()
+        compose.onAllNodesWithText(PhoneSession.BAD_NUMBER).assertCountEquals(0)
     }
 
     @Test

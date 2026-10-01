@@ -13,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -205,7 +206,17 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                 PhoneTabs(vm.phonePage, unseen, onSelect = { vm.phonePage = it })
                 when (vm.phonePage) {
                     PhonePage.KEYPAD -> main(Modifier.weight(1f))
-                    PhonePage.RECENTS -> recents(Modifier.weight(1f))
+                    PhonePage.RECENTS -> {
+                        // A call back from here that didn't go out (refused, or not a number any more)
+                        // says why here: the Keypad page that would show it is behind the other tab.
+                        val why = vm.dialError ?: phone.notice
+                        if (why != null) {
+                            Box(Modifier.padding(horizontal = 16.dp)) {
+                                NoticeLine(why, onDismiss = { vm.clearDialError(); vm.clearNotice() })
+                            }
+                        }
+                        recents(Modifier.weight(1f))
+                    }
                 }
             }
         }

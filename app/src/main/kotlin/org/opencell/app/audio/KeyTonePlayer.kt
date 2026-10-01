@@ -29,7 +29,8 @@ class KeyTonePlayer(context: Context) : KeySound {
             try {
                 start(key)
             } catch (e: Exception) {
-                Log.w(TAG, "key tone $key", e)
+                // Never the key: the keys typed would spell the number out in the system log.
+                Log.w(TAG, "a key tone failed", e)
             }
         }
     }
