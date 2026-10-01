@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The call log stays on this phone (dial-and-recents spec §4.4). allowBackup="false"
+  already stops cloud backup, but since Android 12 it doesn't stop a device-to-device
+  transfer: these rules keep the call log's file out of both.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="opencell_calls.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="opencell_calls.xml" />
+    </device-transfer>
+</data-extraction-rules>

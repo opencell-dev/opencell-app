@@ -151,19 +151,26 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
   ([`numbering-plan.md`](https://github.com/opencell-dev/opencell/blob/main/numbering-plan.md)),
   and **Call** is enabled only for a number the dial plan accepts. OpenCell
   carries no emergency calls: 911, 112 and 999 are refused. **Delete** removes a
-  digit (long-press: clear); long-press the number to **Paste** or **Copy**.
+  digit (long-press: clear); long-press the number to **Paste** or **Copy**
+  (a pasted extension or pause, `ext 4`, `x4`, `,`, is left off).
   **Test numbers** calls the echo and playback services of core 1 and core 2.
   Keys sound their DTMF tone (local only, muted in silent and vibrate modes):
-  **⋮ > Keypad tones** turns that off.
+  **⋮ > Keypad tones** turns that off. The whole keypad always fits without
+  scrolling, on both Fold screens, sideways and in large font: when the line
+  card and the readiness card don't fit above it they shrink to one line each
+  (tap the line for the whole card), and a short window puts the number beside
+  the keys.
 - **Recents** (a second tab on the cover screen; beside the keypad on the inner
   screen): every call, newest first by day, outgoing, incoming, missed and
   rejected, with its time, duration (connected time) or how it ended. The call
   button calls back; tapping a row puts its number on the keypad; a long press
   offers Copy number and Delete; **⋮ > Clear call log** empties it. Behind
   Developer options each call also shows its codec and voice counters. The log
-  stays on this phone (at most 500 calls; not in backups) and survives
+  stays on this phone (at most 500 calls), out of cloud backup and out of a
+  device-to-device transfer to a new phone (`data_extraction_rules.xml`), and survives
   **Deactivate terminal**. Unseen missed calls show as a count on **Phone** and
-  **Recents** and as a silent **Missed call** notification that opens Recents;
+  **Recents** and as a silent **Missed call** notification that opens Recents
+  (swiped away, it comes back only with the next missed call);
   closing a missed call's screen opens Recents too. A call that starts and ends
   while no phone is connected to the terminal can't be logged (the terminal
   keeps no events for the phone).
