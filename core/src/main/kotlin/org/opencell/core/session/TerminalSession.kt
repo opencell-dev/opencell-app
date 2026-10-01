@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.opencell.core.calllog.CallLog
 import org.opencell.core.link.Backoff
 import org.opencell.core.link.Connector
 import org.opencell.core.link.LinkManager
@@ -42,7 +43,8 @@ import kotlin.time.TimeSource
  * loopback test. The Android layer only supplies a [Connector], a long-lived
  * [scope], a [PhoneMemory] and, for voice, the codecs, the audio devices,
  * whether the microphone may be used now ([micAllowed]) and the call progress
- * tones' plan ([tonePlan]).
+ * tones' plan ([tonePlan]). Every call the phone sees goes into [callLog] when
+ * it ends, with its voice counters (dial-and-recents spec §4.1).
  */
 class TerminalSession(
     connector: Connector,
@@ -56,6 +58,7 @@ class TerminalSession(
     audio: AudioIo = AudioIo.NONE,
     micAllowed: StateFlow<Boolean> = MutableStateFlow(true),
     tonePlan: StateFlow<TonePlan> = MutableStateFlow(TonePlans.NORTH_AMERICA),
+    val callLog: CallLog = CallLog(),
 ) {
     val link = LinkManager(connector, scope, reconnect, timeSource, wallClock)
     val sender = UplinkSender(link, retryPolicy)
@@ -76,6 +79,10 @@ class TerminalSession(
     private var loopbackJob: Job? = null
 
     init {
+        scope.launch {
+            // The call state machine is the log's only source: the screens never write to it.
+            phone.finishedCalls.collect { call -> callLog.record(call, voice.takeCounters()) }
+        }
         scope.launch {
             link.downlink.collect {
                 // Voice is eight payloads a second: the console would hold nothing else.

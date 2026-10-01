@@ -117,15 +117,48 @@ class VoiceSession(
     private var muted = false
     private var job: Job? = null
 
+    private val countersLock = Any()
+
+    /** Voice runs that stopped since the last [takeCounters] (a link drop mid-call ends one run, the reconnect starts another). */
+    private var banked = VoiceCounters()
+
+    /** [takeCounters] already counted the running run: what's left of it (frames after the call ended) is dropped. */
+    private var runTaken = false
+
     init {
         scope.launch {
             phone.map(::wanted).distinctUntilChanged().collect { want ->
                 job?.cancelAndJoin()
                 job = null
+                endRun()
                 _state.value = VoiceState.Off
                 if (want != null) start(want.codec)
             }
         }
+    }
+
+    /**
+     * The voice counters since the last call to this, for the call that just
+     * ended (the call log): every voice run since, including one still
+     * stopping. Zero when there was no voice. Voice only runs in a connected
+     * call, and calls come one at a time, so this is that call's.
+     */
+    fun takeCounters(): VoiceCounters = synchronized(countersLock) {
+        var total = banked
+        val s = _state.value
+        if (s is VoiceState.On && !runTaken) {
+            total += VoiceCounters.of(s.stats)
+            runTaken = true
+        }
+        banked = VoiceCounters()
+        total
+    }
+
+    /** A run stops (call over, link down, or voice failed): bank its counters unless [takeCounters] already took them. */
+    private fun endRun() = synchronized(countersLock) {
+        val s = _state.value
+        if (s is VoiceState.On && !runTaken) banked += VoiceCounters.of(s.stats)
+        runTaken = false
     }
 
     /** Mutes or unmutes the microphone for the rest of this call (encoded silence goes out). */
@@ -193,6 +226,7 @@ class VoiceSession(
 
     private fun fail(e: Throwable) {
         log.log(Level.WARNING, "voice stopped", e)
+        endRun()
         _state.value = VoiceState.Failed(e.message ?: e.javaClass.simpleName)
     }
 

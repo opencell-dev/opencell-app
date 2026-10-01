@@ -2,10 +2,13 @@ package org.opencell.core.phone
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -104,6 +107,16 @@ class PhoneSession(
 
     private val _callData = MutableStateFlow(CallData())
     val callData: StateFlow<CallData> = _callData.asStateFlow()
+
+    private val tracker = CallTracker()
+    private val _finishedCalls = Channel<FinishedCall>(Channel.UNLIMITED)
+
+    /**
+     * Each call once, when it stops being active ([CallTracker]): the call log's
+     * source. Buffered without limit until collected; meant for one collector
+     * ([org.opencell.core.session.TerminalSession]).
+     */
+    val finishedCalls: Flow<FinishedCall> = _finishedCalls.receiveAsFlow()
 
     /** The single scheduled [PhoneInput.Tick] for a STATUS held back by the grace, if any. */
     private var pendingTick: Job? = null
@@ -310,8 +323,10 @@ class PhoneSession(
     private fun apply(input: PhoneInput) {
         synchronized(lock) {
             val before = _state.value
-            val after = PhoneReducer.reduce(before, input, monotonic(), clock())
+            val wall = clock()
+            val after = PhoneReducer.reduce(before, input, monotonic(), wall)
             _state.value = after
+            tracker.step(before, input, after, wall)?.let { _finishedCalls.trySend(it) }
             if (before.call?.phase != CallPhase.CONNECTED && after.call?.phase == CallPhase.CONNECTED) _callData.value = CallData()
             if (dataJob != null && (after.call?.phase != CallPhase.CONNECTED || !after.linkUp)) {
                 dataJob?.cancel()
