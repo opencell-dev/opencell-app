@@ -6,8 +6,9 @@ import org.opencell.core.calllog.CallLogStore
 
 /**
  * The call log's text ([org.opencell.core.calllog.CallLogCodec]) in its own
- * preferences file, `opencell_calls`, apart from the settings. Local only: the
- * app sets `allowBackup="false"`, so it never leaves the phone.
+ * preferences file, `opencell_calls`, apart from the settings. Local only:
+ * `allowBackup="false"` keeps it out of cloud backup and
+ * `res/xml/data_extraction_rules.xml` out of a device-to-device transfer too.
  */
 class PrefsCallLogStore(private val prefs: SharedPreferences) : CallLogStore {
     override fun read(): String? = prefs.getString(KEY, null)
