@@ -1,5 +1,6 @@
 package org.opencell.app.ui
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,11 +19,22 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handle(intent)
         setContent {
             OpenCellTheme {
                 AppRoot(viewModel)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
+    }
+
+    /** The missed-call notification's tap ([ACTION_SHOW_RECENTS]) opens the Phone tab on Recents. */
+    internal fun handle(intent: Intent?) {
+        if (intent?.action == ACTION_SHOW_RECENTS) viewModel.showRecents()
     }
 
     override fun onResume() {
@@ -39,5 +51,9 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         graph.mainActivityInFront.value = false
+    }
+
+    companion object {
+        const val ACTION_SHOW_RECENTS = "org.opencell.app.SHOW_RECENTS"
     }
 }

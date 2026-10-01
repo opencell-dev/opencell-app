@@ -19,6 +19,7 @@ import org.opencell.app.data.DeveloperUnlock
 import org.opencell.app.data.PrefsCallLogStore
 import org.opencell.app.data.PrefsPhoneMemory
 import org.opencell.app.data.TerminalRepository
+import org.opencell.app.service.MissedCallNotifier
 import org.opencell.codec2.Codec2
 import org.opencell.core.calllog.CallLog
 import org.opencell.core.link.Connector
@@ -67,6 +68,9 @@ class AppGraph(
         callLog = callLog,
     )
     val callAudio = CallAudio(session.voice, route, MutableStateFlow(false), micAllowed)
+    /** Posts and clears the missed-call notification from the log's unseen count. */
+    val missedCalls = MissedCallNotifier(context, callLog, scope)
+
     val repository = TerminalRepository(
         context = context,
         session = session,

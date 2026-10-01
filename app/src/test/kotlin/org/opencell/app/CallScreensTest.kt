@@ -196,6 +196,9 @@ class CallScreensTest {
         compose.activity.graph.repository.disconnect()
         compose.waitForText("Call ended (the phone was disconnected from the terminal)")
         compose.onNodeWithText("Close").performClick()
+        // The ring counts as missed, so the Phone tab opens on Recents (spec §6); the Keypad page says why there's no line.
+        compose.waitForText("Missed")
+        compose.onNodeWithText("Keypad").performClick()
         compose.waitForText("No terminal connected")
     }
 

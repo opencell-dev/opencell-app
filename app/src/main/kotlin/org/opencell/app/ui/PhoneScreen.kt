@@ -30,6 +30,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,11 +44,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,6 +62,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -83,17 +90,24 @@ private enum class PhoneStage { CONNECT, WAITING, ACTIVATION_RESULT, ONBOARDING,
  * The Phone tab: what a subscriber sees. Picks one of: no terminal, waiting
  * for the terminal's state, activation result, activation (QR code), or the
  * registered home: the line card and the keypad (dial-and-recents spec §2).
+ * Recents sits beside that page on a wide screen (the Fold's inner screen)
+ * and in a second tab on a narrow one; before the first call, with the
+ * terminal not yet registered, there are no tabs.
  */
 @Composable
 fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     val link by vm.linkState.collectAsStateWithLifecycle()
     val wanted by vm.wanted.collectAsStateWithLifecycle()
     val phone by vm.phone.collectAsStateWithLifecycle()
+    val log by vm.callLogEntries.collectAsStateWithLifecycle()
+    val unseen by vm.unseenMissed.collectAsStateWithLifecycle()
+    val devUnlocked by vm.devUnlocked.collectAsStateWithLifecycle()
     val tonesOn by vm.keypadTonesOn.collectAsStateWithLifecycle()
     // Saveable: folding or unfolding recreates the activity, and must not close these.
     var menu by rememberSaveable { mutableStateOf(false) }
     var confirmDeactivate by rememberSaveable { mutableStateOf(false) }
     var chooseTones by rememberSaveable { mutableStateOf(false) }
+    var confirmClearLog by rememberSaveable { mutableStateOf(false) }
     val activated = phone.linkUp && phone.sig != null && phone.sig != SigState.NOT_ACTIVATED
     val stage = when {
         wanted == null && !link.isConnected -> PhoneStage.CONNECT
@@ -109,26 +123,34 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
             TopAppBar(
                 title = { Text("OpenCell") },
                 actions = {
-                    if (terminalMenu) {
+                    if (terminalMenu || log.isNotEmpty()) {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Activate with a new code") },
-                                onClick = { menu = false; vm.reactivating = true },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Deactivate terminal") },
-                                onClick = { menu = false; confirmDeactivate = true },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Call tones") },
-                                onClick = { menu = false; chooseTones = true },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Keypad tones") },
-                                trailingIcon = { Checkbox(checked = tonesOn, onCheckedChange = null) },
-                                onClick = { menu = false; vm.setKeypadTones(!tonesOn) },
-                            )
+                            if (terminalMenu) {
+                                DropdownMenuItem(
+                                    text = { Text("Activate with a new code") },
+                                    onClick = { menu = false; vm.reactivating = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Deactivate terminal") },
+                                    onClick = { menu = false; confirmDeactivate = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Call tones") },
+                                    onClick = { menu = false; chooseTones = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Keypad tones") },
+                                    trailingIcon = { Checkbox(checked = tonesOn, onCheckedChange = null) },
+                                    onClick = { menu = false; vm.setKeypadTones(!tonesOn) },
+                                )
+                            }
+                            if (log.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Clear call log") },
+                                    onClick = { menu = false; confirmClearLog = true },
+                                )
+                            }
                         }
                     }
                 },
@@ -136,11 +158,43 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
         },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
+        val main: @Composable (Modifier) -> Unit = { m ->
+            if (stage == PhoneStage.HOME) {
+                HomePage(vm, phone, m)
+            } else {
+                SetupPage(vm, stage, link, phone, onOpenTerminal, m)
+            }
+        }
+        val recents: @Composable (Modifier) -> Unit = { m ->
+            Recents(
+                log,
+                unseen,
+                canDial = phone.canDial,
+                devUnlocked = devUnlocked,
+                actions = RecentsActions(
+                    onPutOnKeypad = vm::putOnKeypad,
+                    onCall = vm::dialNumber,
+                    onDelete = vm::deleteCall,
+                    onSeen = vm::markMissedSeen,
+                ),
+                modifier = m,
+            )
+        }
         val area = Modifier.fillMaxSize().padding(padding)
-        if (stage == PhoneStage.HOME) {
-            HomePage(vm, phone, area)
-        } else {
-            SetupPage(vm, stage, link, phone, onOpenTerminal, area)
+        when {
+            stage != PhoneStage.HOME && log.isEmpty() -> main(area)
+            isWide() -> Row(area) {
+                recents(Modifier.weight(1f))
+                VerticalDivider()
+                main(Modifier.width(420.dp))
+            }
+            else -> Column(area) {
+                PhoneTabs(vm.phonePage, unseen, onSelect = { vm.phonePage = it })
+                when (vm.phonePage) {
+                    PhonePage.KEYPAD -> main(Modifier.weight(1f))
+                    PhonePage.RECENTS -> recents(Modifier.weight(1f))
+                }
+            }
         }
     }
 
@@ -163,6 +217,34 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
         )
     }
 
+    // No text field in it, so a platform dialog is safe under Robolectric (see DeveloperOptionsDialog).
+    if (confirmClearLog) {
+        AlertDialog(
+            onDismissRequest = { confirmClearLog = false },
+            title = { Text("Clear the call log?") },
+            text = { Text("Every call in Recents is deleted from this phone. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { confirmClearLog = false; vm.clearCallLog() }) { Text("Clear") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClearLog = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Keypad and Recents, the narrow screen's two pages; Recents carries the missed-call count. */
+@Composable
+private fun PhoneTabs(page: PhonePage, unseen: Int, onSelect: (PhonePage) -> Unit) {
+    PrimaryTabRow(selectedTabIndex = page.ordinal) {
+        Tab(selected = page == PhonePage.KEYPAD, onClick = { onSelect(PhonePage.KEYPAD) }, text = { Text("Keypad") })
+        Tab(
+            selected = page == PhonePage.RECENTS,
+            onClick = { onSelect(PhonePage.RECENTS) },
+            modifier = if (unseen > 0) Modifier.semantics { stateDescription = missedCallsLabel(unseen) } else Modifier,
+            text = {
+                BadgedBox(badge = { if (unseen > 0) Badge { Text("$unseen") } }) { Text("Recents") }
+            },
+        )
+    }
 }
 
 /** Everything before the dial screen: connecting, waiting, activating. Scrolls. */

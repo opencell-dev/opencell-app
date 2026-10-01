@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,6 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowSizeClass
@@ -52,9 +55,14 @@ enum class Destination(val label: String, val icon: ImageVector, val developerOn
  * and a rail on the inner screen. Folding or unfolding only changes the
  * window size; the selected destination is saved and the link is untouched.
  * Phone is the subscriber's screen; Terminal, Console and Loopback are the
- * bring-up and diagnostics tools of v1. When the call screen opens for an
- * outgoing call, the keypad's number is cleared: the terminal took it
- * (dial-and-recents spec §2).
+ * bring-up and diagnostics tools of v1. Phone's icon carries the count of
+ * missed calls not yet seen in Recents.
+ *
+ * Around a call (dial-and-recents spec §6): when the call screen opens for an
+ * outgoing call, the keypad's number is cleared (the terminal took it; Recents
+ * has it now). When the call screen goes away and a missed call is waiting to
+ * be seen, the Phone tab opens on Recents, as it does from the missed-call
+ * notification ([MainViewModel.showRecents]).
  */
 @Composable
 fun AppRoot(vm: MainViewModel) {
@@ -65,9 +73,23 @@ fun AppRoot(vm: MainViewModel) {
     // the Terminal tab's ⋮ menu is what opens it (DeveloperOptionsDialog's KDoc explains why
     // it isn't a platform AlertDialog).
     var showDeveloperDialog by rememberSaveable { mutableStateOf(false) }
+    val unseen by vm.unseenMissed.collectAsStateWithLifecycle()
     val inCall = phone.call != null
+    var afterCall by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(inCall) {
-        if (inCall && vm.phone.value.call?.direction == Direction.OUTGOING) vm.clearDial()
+        if (inCall) {
+            afterCall = true
+            if (vm.phone.value.call?.direction == Direction.OUTGOING) vm.clearDial()
+        } else if (afterCall) {
+            afterCall = false
+            if (vm.unseenMissed.value > 0) vm.showRecents()
+        }
+    }
+    LaunchedEffect(vm.recentsRequested) {
+        if (vm.recentsRequested) {
+            destination = Destination.PHONE
+            vm.recentsRequested = false
+        }
     }
     if (inCall) {
         // Any call (ringing, connected or just ended) takes the whole screen, whatever tab is open.
@@ -78,15 +100,21 @@ fun AppRoot(vm: MainViewModel) {
     // Locking developer options while a developer-only tab is open falls back to Phone; shown
     // is computed rather than waiting a frame for the effect, so the tab never flashes its content.
     val shown = if (!devUnlocked && destination.developerOnly) Destination.PHONE else destination
-    LaunchedEffect(shown) { destination = shown }
+    // Keyed on the lock, and reading destination when it runs: an effect keyed on `shown` could
+    // write back a tab from an older frame over a newer change (showRecents in the same frame).
+    LaunchedEffect(devUnlocked) { if (!devUnlocked && destination.developerOnly) destination = Destination.PHONE }
 
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             Destination.entries.filter { !it.developerOnly || devUnlocked }.forEach { d ->
+                val missed = d == Destination.PHONE && unseen > 0
                 item(
                     selected = d == shown,
                     onClick = { destination = d },
                     icon = { Icon(d.icon, contentDescription = null) },
+                    // The item clears its icon's and badge's semantics: TalkBack hears the count as the item's state.
+                    modifier = if (missed) Modifier.semantics { stateDescription = missedCallsLabel(unseen) } else Modifier,
+                    badge = if (missed) ({ Badge { Text("$unseen") } }) else null,
                     label = { Text(d.label) },
                 )
             }

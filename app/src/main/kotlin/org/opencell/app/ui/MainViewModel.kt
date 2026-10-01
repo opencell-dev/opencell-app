@@ -40,6 +40,9 @@ data class Environment(
     val fullScreenCalls: Boolean = true,
 )
 
+/** The Phone tab's two pages on a narrow screen; a wide one shows both side by side. */
+enum class PhonePage { KEYPAD, RECENTS }
+
 /** The console input parsed into bytes, or why it can't be sent. */
 data class ConsoleDraft(val bytes: ByteArray?, val error: String?) {
     val size: Int get() = bytes?.size ?: 0
@@ -237,6 +240,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Pasted text replaces the number (the keypad has no cursor). */
     fun paste(text: String) = edit(DialPad.fromPaste(text))
 
+    /** A number from Recents, put on the keypad to check before calling. */
+    fun putOnKeypad(number: String) {
+        edit(DialPad.fromPaste(number))
+        phonePage = PhonePage.KEYPAD
+    }
+
+    /** The Phone tab's page on a narrow screen. */
+    var phonePage by mutableStateOf(PhonePage.KEYPAD)
+
+    /** Set by [showRecents]; AppRoot switches to the Phone tab and clears it. */
+    var recentsRequested by mutableStateOf(false)
+
+    /** Opens the Phone tab on Recents (the missed-call notification, or a call just missed). */
+    fun showRecents() {
+        phonePage = PhonePage.RECENTS
+        recentsRequested = true
+    }
+
+    // --- call log ---
+
+    private val callLog = app.graph.callLog
+    val callLogEntries = callLog.entries
+    val unseenMissed = callLog.unseenMissed
+
+    fun deleteCall(id: Long) = callLog.delete(id)
+    fun clearCallLog() = callLog.clear()
+    fun markMissedSeen() = callLog.markMissedSeen()
 
     /** A scanned or pasted code, checked like the terminal checks it. Valid codes wait for [confirmActivation]. */
     fun onCode(text: String) {
