@@ -7,8 +7,9 @@ interface and holds no secrets. The app:
 
 - activates a terminal from a one-time QR code (camera or pasted text);
 - shows the registered number, the network's mode (Part 15 / Part 97) and the link;
-- places calls, rings for incoming calls itself (a looping ringtone and
-  vibration, whatever screen is showing), answers, rejects and hangs up;
+- places calls from a phone keypad, rings for incoming calls itself (a looping
+  ringtone and vibration, whatever screen is showing), answers, rejects and hangs up;
+- keeps a call log on the phone (Recents), with a missed-call badge and notification;
 - carries voice in a connected call: Codec2 1200, three 40 ms frames in each
   18-byte app data frame, with mute and speaker;
 - plays call progress tones itself (ringback, busy, reorder, SIT or number
@@ -61,7 +62,7 @@ phone state, call-flow, link and loopback tests, and the Robolectric UI tests in
 | Permission | Why | Asked |
 |---|---|---|
 | Nearby devices (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`) | Find and connect to terminals. Scanning is declared `neverForLocation`, so no location permission is needed. | **Grant** card on the Terminal tab |
-| Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification, and the incoming-call notification (Answer / Reject, full screen). Ringing itself (the ringtone and vibration) doesn't need it. | Same card; also an **Allow** card on the Phone tab (it also shows when notifications or the calls channel are blocked in Settings), which opens the app's notification settings when the permission is already granted or a request was denied for good |
+| Notifications (`POST_NOTIFICATIONS`) | The ongoing "Terminal link" notification, the incoming-call notification (Answer / Reject, full screen), and the silent missed-call notification. Ringing itself (the ringtone and vibration) doesn't need it. | Same card; also an **Allow** card on the Phone tab (it also shows when notifications or the calls channel are blocked in Settings), which opens the app's notification settings when the permission is already granted or a request was denied for good |
 | Camera (`CAMERA`) | Scanning the activation QR code. Pasting the code works without it. | When you tap **Scan QR code**; if it was denied for good, the Phone tab says so and links to the app's settings |
 | Microphone (`RECORD_AUDIO`) | Your side of a call. Without it the other side hears silence; you still hear them. | When a call first connects; again from **Allow microphone** on the call screen |
 | Full-screen calls (`USE_FULL_SCREEN_INTENT`) | Incoming calls over the lock screen. Android 14+ grants it by default only to Play-listed calling apps, so allow it once in Settings. Without it a call shows as a heads-up notification. | **Allow** card on the Phone tab, which opens the system setting |
@@ -117,7 +118,7 @@ also do all of the following:
   themselves.)
 - **Demo terminal** is a simulated terminal and network, for trying everything
   without hardware. It offers **Use a demo code** for activation, its test peer
-  (**Test peer**, +883-1-606-555-00100) answers after 3 s, calling your own
+  (**Test numbers > Echo test (core 1)**, +883-1-606-555-00100) answers after 3 s, calling your own
   number is busy, and +883-1-606-555-09999 is unreachable. It's a developer
   feature (see **Developer options** below): it only shows up once unlocked.
 
@@ -141,13 +142,31 @@ confirmation) wipes the terminal's keys; the menu is hidden during a call
 
 ### Calls
 
-- **Make a call**: type the number and tap **Call**. In your own country the
-  national number is enough: `606-555-01234`, or `606-555-1234` (a leading 0 of
-  the 5-digit subscriber number can be left out); from anywhere, the full
-  `+883-1-606-555-01234`. Spaces, dashes, dots and parentheses are fine. The
-  line under the field shows the full number that will be dialled
-  ([`numbering-plan.md`](https://github.com/opencell-dev/opencell/blob/main/numbering-plan.md)). OpenCell carries no emergency calls: 911, 112 and 999
-  are refused.
+- **Make a call** (Phone tab, **Keypad**): type the number on the keypad and tap
+  the green **Call**. In your own country the national number is enough:
+  `606-555-01234`, or `606-555-1234` (a leading 0 of the 5-digit subscriber
+  number can be left out); from anywhere, the full `+883-1-606-555-01234`
+  (long-press **0** for `+`). The number groups itself as you type; the line
+  under it shows the full number that will be dialled
+  ([`numbering-plan.md`](https://github.com/opencell-dev/opencell/blob/main/numbering-plan.md)),
+  and **Call** is enabled only for a number the dial plan accepts. OpenCell
+  carries no emergency calls: 911, 112 and 999 are refused. **Delete** removes a
+  digit (long-press: clear); long-press the number to **Paste** or **Copy**.
+  **Test numbers** calls the echo and playback services of core 1 and core 2.
+  Keys sound their DTMF tone (local only, muted in silent and vibrate modes):
+  **⋮ > Keypad tones** turns that off.
+- **Recents** (a second tab on the cover screen; beside the keypad on the inner
+  screen): every call, newest first by day, outgoing, incoming, missed and
+  rejected, with its time, duration (connected time) or how it ended. The call
+  button calls back; tapping a row puts its number on the keypad; a long press
+  offers Copy number and Delete; **⋮ > Clear call log** empties it. Behind
+  Developer options each call also shows its codec and voice counters. The log
+  stays on this phone (at most 500 calls; not in backups) and survives
+  **Deactivate terminal**. Unseen missed calls show as a count on **Phone** and
+  **Recents** and as a silent **Missed call** notification that opens Recents;
+  closing a missed call's screen opens Recents too. A call that starts and ends
+  while no phone is connected to the terminal can't be logged (the terminal
+  keeps no events for the phone).
   Numbers are shown in the international form, `+883-1-606-555-01234`.
   The call screen shows Calling, Ringing, Connected, and at the end the cause
   (busy, no answer, unreachable, rejected, link lost…).
@@ -268,11 +287,15 @@ Lock** turns them off again.
              PairingRules  (auth statuses, stale bond vs failed pairing)
              UplinkSender  (validation + 0x80 retry policy, ordered sends)
   phone/     PhoneReducer  (pure state machine: EVENTs, STATUS byte 3, accepted commands)
-             PhoneSession  (commands, resync on connect)
+             PhoneSession  (commands, resync on connect, finished calls)
+             CallTracker   (each call once, when it stops being active: the log's source)
+             DialPad, ServiceNumbers (the keypad's rules, the test numbers)
+  calllog/   CallLog (entries, cap, unseen missed), CallLogCodec (text form),
+             CallLogDisplay (Recents' wording and day groups)
   voice/     VoiceSession  (uplink paced by the microphone, drop on 0x80; downlink
              JitterBuffer with concealment), BlockCodec (3 codec frames per app
              data frame), VoiceCodec/CodecId, AudioIo; CallTonePlayer (toneFor),
-             ToneGenerator, TonePlans (North American, UK)
+             ToneGenerator, TonePlans (North American, UK), DtmfTones (key tones)
   loopback/  LoopbackRunner, LoopbackStats
   session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
   sim/       SimulatedTerminal (terminal + network: demo mode and tests)
@@ -282,16 +305,18 @@ Lock** turns them off again.
              tools/codec2/vendor.sh), libopencell_codec2.so (the JNI glue)
 :app   (Android)
   audio/     AndroidAudio (AudioRecord/AudioTrack, 8 kHz), CallAudioRoute (mode,
-             focus, earpiece/speaker/headset), CallAudio, TonePlanSetting
+             focus, earpiece/speaker/headset), CallAudio, TonePlanSetting,
+             KeypadTones (setting), KeyTonePlayer (sonification AudioTrack)
   ble/       GattConnector/GattConnection (serialized GATT ops), Bonder (createBond +
              ACTION_BOND_STATE_CHANGED), BleScanner
   data/      TerminalRepository (app-scoped owner of the session), PrefsPhoneMemory,
-             DeveloperUnlock (Console/Loopback/demo terminal gate, remembered)
+             DeveloperUnlock (Console/Loopback/demo terminal gate, remembered),
+             PrefsCallLogStore (the call log, its own preferences file)
   scan/      QrDecoder (ZXing), QrScanner (CameraX)
   service/   LinkService (connectedDevice foreground service, owns ringing via
              RingPlan and the microphone type via MicPlan), CallRinger,
-             CallNotifier, CallActionReceiver
-  ui/        Compose: Phone (activation, home, dialer), CallScreen/CallActivity,
+             CallNotifier, CallActionReceiver, MissedCallNotifier
+  ui/        Compose: Phone (activation, home, Keypad, Recents), CallScreen/CallActivity,
              Terminal/Status, Console, Loopback, DeveloperOptionsDialog
 ```
 
