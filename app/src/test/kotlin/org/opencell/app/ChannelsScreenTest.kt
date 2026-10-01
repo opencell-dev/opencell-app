@@ -17,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.CHANNEL_PICKER
 import org.opencell.app.ui.MainActivity
+import org.opencell.core.dev.DeveloperAccess
 import org.opencell.core.session.ChannelSession
 import org.robolectric.annotation.Config
 
@@ -33,6 +34,7 @@ class ChannelsScreenTest {
     }
 
     private fun openChannelsOnTheDemoTerminal() {
+        compose.activity.graph.developerAccess.tryUnlock(DeveloperAccess.CODE)
         compose.waitForText("No terminal connected")
         compose.onNodeWithText("Terminal").performClick()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Demo terminal"))
