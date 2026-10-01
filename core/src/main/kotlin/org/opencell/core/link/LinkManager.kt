@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import org.opencell.core.protocol.ScanList
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import kotlin.time.TimeSource
@@ -137,6 +138,18 @@ class LinkManager(
             null
         } ?: return null
         return TerminalStatus.decodeOrNull(raw)?.also(::publishStatus)
+    }
+
+    override suspend fun refreshScan(): ScanList? {
+        val c = connection ?: return null
+        val raw = try {
+            c.readScan()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        return ScanList.decode(raw)
     }
 
     private fun publishStatus(s: TerminalStatus) {

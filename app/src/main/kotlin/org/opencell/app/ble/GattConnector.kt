@@ -135,7 +135,12 @@ internal class GattConnection(
 
     private class Result(val status: Int, val value: ByteArray? = null, val mtu: Int = 0)
 
-    private class Pending(val kind: Kind, val result: CompletableDeferred<Result> = CompletableDeferred())
+    /** [uuid]: the characteristic a READ is for; its answer must name the same one. */
+    private class Pending(
+        val kind: Kind,
+        val uuid: UUID? = null,
+        val result: CompletableDeferred<Result> = CompletableDeferred(),
+    )
 
     private val opLock = Mutex()
     private val pending = AtomicReference<Pending?>(null)
@@ -155,6 +160,10 @@ internal class GattConnection(
     private lateinit var up: BluetoothGattCharacteristic
     private lateinit var status: BluetoothGattCharacteristic
     private lateinit var command: BluetoothGattCharacteristic
+
+    /** Contract v4's scan list; null on older firmware, which has no SCAN. */
+    @Volatile
+    private var scan: BluetoothGattCharacteristic? = null
 
     @Volatile
     override var mtu: Int = 23
@@ -191,13 +200,13 @@ internal class GattConnection(
             c: BluetoothGattCharacteristic,
             value: ByteArray,
             statusCode: Int,
-        ) = complete(Kind.READ, Result(statusCode, value.copyOf()))
+        ) = complete(Kind.READ, Result(statusCode, value.copyOf()), c.uuid)
 
         // Android 12
         @Deprecated("Deprecated in API 33")
         @Suppress("DEPRECATION")
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, statusCode: Int) =
-            complete(Kind.READ, Result(statusCode, c.value?.copyOf()))
+            complete(Kind.READ, Result(statusCode, c.value?.copyOf()), c.uuid)
 
         // Android 13+
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) =
@@ -321,6 +330,7 @@ internal class GattConnection(
         command = service.getCharacteristic(GattContract.COMMAND)
             ?: throw GattException("COMMAND characteristic missing (terminal firmware older than contract v2)")
         val event = service.getCharacteristic(GattContract.EVENT) ?: throw GattException("EVENT characteristic missing")
+        scan = service.getCharacteristic(GattContract.SCAN) // optional: firmware older than contract v4 has none
         enableNotifications(down)
         enableNotifications(status)
         enableNotifications(event)
@@ -381,7 +391,14 @@ internal class GattConnection(
     }
 
     override suspend fun readStatus(): ByteArray? {
-        val r = op(Kind.READ) { it.readCharacteristic(status) }
+        val r = op(Kind.READ, uuid = status.uuid) { it.readCharacteristic(status) }
+        return if (r.status == BluetoothGatt.GATT_SUCCESS) r.value else null
+    }
+
+    /** Up to 141 bytes: Android does the long read (read blob) and hands back the whole value. */
+    override suspend fun readScan(): ByteArray? {
+        val c = scan ?: return null
+        val r = op(Kind.READ, uuid = c.uuid) { it.readCharacteristic(c) }
         return if (r.status == BluetoothGatt.GATT_SUCCESS) r.value else null
     }
 
@@ -425,11 +442,12 @@ internal class GattConnection(
         kind: Kind,
         timeout: Duration = OP_TIMEOUT,
         timeoutDropsLink: Boolean = true,
+        uuid: UUID? = null,
         start: (BluetoothGatt) -> Boolean,
     ): Result =
         opLock.withLock {
             val g = gatt?.takeUnless { closed.get() } ?: throw GattException("not connected", dropStatus)
-            val p = Pending(kind)
+            val p = Pending(kind, uuid)
             pending.set(p)
             try {
                 if (!start(g)) {
@@ -447,9 +465,18 @@ internal class GattConnection(
             }
         }
 
-    private fun complete(kind: Kind, r: Result) {
+    /**
+     * Completes the pending op if the callback is its answer: the same [kind]
+     * and, for a READ, the same characteristic [uuid]. A late answer to an
+     * earlier op (a read that timed out during a system pairing) is ignored.
+     */
+    private fun complete(kind: Kind, r: Result, uuid: UUID? = null) {
         val p = pending.get()
-        if (p != null && p.kind == kind) p.result.complete(r) else Log.w(TAG, "unexpected $kind callback")
+        if (p != null && p.kind == kind && p.uuid == uuid) {
+            p.result.complete(r)
+        } else {
+            Log.w(TAG, "unexpected $kind callback${uuid?.let { " for $it" } ?: ""}")
+        }
     }
 
     private fun failPending(reason: String, status: Int = 0) {

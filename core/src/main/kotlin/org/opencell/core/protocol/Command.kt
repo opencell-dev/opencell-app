@@ -1,7 +1,10 @@
 package org.opencell.core.protocol
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
 /**
- * COMMAND writes (`op (1) || args`, contract v3). The terminal answers each
+ * COMMAND writes (`op (1) || args`, contract v4). The terminal answers each
  * write with success or an ATT error: 0x80 not in the right state, 0x0D bad
  * length, 0x81 malformed argument. Commands are never retried automatically:
  * 0x80 means the state is wrong, and the app resyncs from STATUS instead.
@@ -54,6 +57,42 @@ sealed interface Command {
         override fun encode() = byteArrayOf(op.toByte(), GattContract.DEACTIVATE_CONFIRM.toByte())
     }
 
+    /**
+     * SCAN SET_USER: the user's scan-list entries, replacing the old ones (at most
+     * [ScanList.MAX_USER]; an empty list clears them). The terminal refuses (0x81)
+     * a frequency off the 915 MHz grid ([ChannelGrid]).
+     */
+    data class ScanSetUser(val channels: List<UserChannel>) : Command {
+        override val op get() = SCAN
+        override val label get() =
+            "SCAN SET_USER " + channels.joinToString { ChannelGrid.mhz(it.freqHz) + if (it.fixed) " fixed" else "" }
+                .ifEmpty { "(none)" }
+
+        override fun encode(): ByteArray {
+            val b = ByteBuffer.allocate(3 + 5 * channels.size).order(ByteOrder.LITTLE_ENDIAN)
+            b.put(op.toByte()).put(SCAN_SET_USER.toByte()).put(channels.size.toByte())
+            for (c in channels) {
+                b.putInt(c.freqHz.toInt())
+                b.put(if (c.fixed) 1 else 0)
+            }
+            return b.array()
+        }
+    }
+
+    /** SCAN SET_FALLBACK: search outside the list after [after] passes (15 never), [chunk] channels a round (1-52). */
+    data class ScanSetFallback(val after: Int, val chunk: Int) : Command {
+        override val op get() = SCAN
+        override val label get() = "SCAN SET_FALLBACK $after/$chunk"
+        override fun encode() = byteArrayOf(op.toByte(), SCAN_SET_FALLBACK.toByte(), after.toByte(), chunk.toByte())
+    }
+
+    /** SCAN FORGET_LEARNED: drop the cells the terminal learned. */
+    data object ScanForgetLearned : Command {
+        override val op get() = SCAN
+        override val label get() = "SCAN FORGET_LEARNED"
+        override fun encode() = byteArrayOf(op.toByte(), SCAN_FORGET_LEARNED.toByte())
+    }
+
     companion object {
         const val ACTIVATE = 0x01
         const val DIAL = 0x02
@@ -61,5 +100,12 @@ sealed interface Command {
         const val REJECT = 0x04
         const val HANGUP = 0x05
         const val DEACTIVATE = 0x06
+        const val SCAN = 0x07
+        const val SCAN_SET_USER = 0x01
+        const val SCAN_SET_FALLBACK = 0x02
+        const val SCAN_FORGET_LEARNED = 0x03
     }
 }
+
+/** A user scan-list entry: a 915 MHz grid frequency, [fixed] for a Part 97 cell with fixed sync. */
+data class UserChannel(val freqHz: Long, val fixed: Boolean = false)

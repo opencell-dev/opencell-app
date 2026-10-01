@@ -14,11 +14,16 @@ interface and holds no secrets. The app:
   18-byte app data frame, with mute and speaker;
 - plays call progress tones itself (ringback, busy, reorder, SIT or number
   unobtainable), North American or UK;
+- shows and edits the terminal's scan list (**Channels** tab): where it is looking
+  for a cell right now, the channels it tries in order and where each came from,
+  up to 4 channels of your own, and when to search outside the list;
 - keeps the v1 bring-up tools: terminal list and STATUS, console, loopback test,
   and a demo terminal — behind Developer options, a static code (matching the
   iOS app).
 
-The BLE contract (v3) is `firmware/components/oc_term/include/oc_term_gatt.h`.
+The BLE contract (v4) is `firmware/components/oc_term/include/oc_term_gatt.h`.
+v4 adds the scan list: the SCAN characteristic, COMMAND 0x07 and 7 more STATUS bytes.
+Firmware older than v4 has no SCAN; the Channels tab then says to update it.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
 A terminal still on v2-numbering firmware refuses v3 DIAL/ACTIVATE arguments and sends
 v2-length EVENTs; the app can't tell that from a genuinely bad argument or number, so it
@@ -304,7 +309,8 @@ Lock** turns them off again.
              data frame), VoiceCodec/CodecId, AudioIo; CallTonePlayer (toneFor),
              ToneGenerator, TonePlans (North American, UK), DtmfTones (key tones)
   loopback/  LoopbackRunner, LoopbackStats
-  session/   TerminalSession (link + sender + phone + console + loopback), ConsoleLog
+  session/   TerminalSession (link + sender + phone + console + loopback + channels),
+             ChannelSession (scan list: SCAN reads, COMMAND SCAN), ConsoleLog
   sim/       SimulatedTerminal (terminal + network: demo mode and tests)
   dev/       DeveloperAccess (the static code, JVM-testable, shared with iOS's copy)
 :codec2 (Android library)
@@ -324,7 +330,7 @@ Lock** turns them off again.
              RingPlan and the microphone type via MicPlan), CallRinger,
              CallNotifier, CallActionReceiver, MissedCallNotifier
   ui/        Compose: Phone (activation, home, Keypad, Recents), CallScreen/CallActivity,
-             Terminal/Status, Console, Loopback, DeveloperOptionsDialog
+             Terminal/Status, Channels, Console, Loopback, DeveloperOptionsDialog
 ```
 
 The link lives in the Application, not in an Activity or ViewModel.

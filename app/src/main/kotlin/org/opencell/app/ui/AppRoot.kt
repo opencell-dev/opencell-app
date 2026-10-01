@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
@@ -48,6 +49,7 @@ import org.opencell.core.phone.Direction
 enum class Destination(val label: String, val icon: ImageVector, val developerOnly: Boolean = false) {
     PHONE("Phone", Icons.Filled.Phone),
     TERMINAL("Terminal", Icons.Filled.Settings),
+    CHANNELS("Channels", Icons.AutoMirrored.Filled.List),
     CONSOLE("Console", Icons.AutoMirrored.Filled.Send, developerOnly = true),
     LOOPBACK("Loopback", Icons.Filled.Refresh, developerOnly = true),
 }
@@ -56,9 +58,10 @@ enum class Destination(val label: String, val icon: ImageVector, val developerOn
  * Top level. The navigation suite is a bottom bar on the Fold's cover screen
  * and a rail on the inner screen. Folding or unfolding only changes the
  * window size; the selected destination is saved and the link is untouched.
- * Phone is the subscriber's screen; Terminal, Console and Loopback are the
- * bring-up and diagnostics tools of v1. Phone's icon carries the count of
- * missed calls not yet seen in Recents.
+ * Phone is the subscriber's screen; Channels is where the terminal looks for a
+ * cell (its scan list); Terminal, Console and Loopback are the bring-up and
+ * diagnostics tools of v1. Phone's icon carries the count of missed calls not
+ * yet seen in Recents.
  *
  * Around a call (dial-and-recents spec §6): when the call screen opens for an
  * outgoing call, the keypad's number is cleared (the terminal took it; Recents
@@ -136,6 +139,9 @@ fun AppRoot(vm: MainViewModel) {
                 devUnlocked = devUnlocked,
                 onOpenDeveloperOptions = { showDeveloperDialog = true },
             )
+            Destination.CHANNELS -> WithStatusPanel(vm, onOpenTerminal = { destination = Destination.TERMINAL }) {
+                ChannelsScreen(vm)
+            }
             Destination.CONSOLE -> WithStatusPanel(vm, onOpenTerminal = { destination = Destination.TERMINAL }) {
                 ConsoleScreen(vm)
             }

@@ -63,6 +63,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val scan = repo.scan
     val wanted = repo.wanted
     val console = session.console.entries
+
+    /** The terminal's scan list (Channels tab). */
+    val channels = session.channels
     val loopback = session.loopback
     val lastTarget: LinkTarget? get() = repo.lastTarget
 

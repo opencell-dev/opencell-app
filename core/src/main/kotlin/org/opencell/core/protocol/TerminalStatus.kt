@@ -61,12 +61,13 @@ enum class SigState(val code: Int, val label: String) {
 }
 
 /**
- * One decoded STATUS characteristic value (20 bytes, little-endian):
+ * One decoded STATUS characteristic value (20 bytes, 27 from contract v4, little-endian):
  *
  * ```
  *  0 u8  state      1 u8 band      2 u8 tier      3 u8 signalling state (SigState)
  *  4 i16 rssi_dbm   6 i16 snr_qdb (0.25 dB; 0 on FLRC links)
  *  8 u32 tmid      12 u32 frame   16 u32 cell_seed
+ * 20 u8  scan_pos  21 u8 scan_len 22 u8 scan_src  23 u32 freq_khz   (v4: [ScanTail])
  * ```
  *
  * Raw codes are kept so that values this app version does not know
@@ -84,6 +85,8 @@ data class TerminalStatus(
     val cellSeed: Long,
     /** STATUS byte 3 ([SigState]); contract v1 firmware sent 0 here. */
     val sigCode: Int = 0,
+    /** Bytes 20-26 (contract v4); null from older firmware. */
+    val scan: ScanTail? = null,
 ) {
     val state: TerminalState? get() = TerminalState.fromCode(stateCode)
     val sig: SigState? get() = SigState.fromCode(sigCode)
@@ -119,9 +122,26 @@ data class TerminalStatus(
             else -> "%.2f dB".format(snrDb)
         }
 
-    /** Packs this status exactly like `oc_term_pack_status()`. Used by the simulator and tests. */
+    /**
+     * Where the terminal is looking: "Scanning 903.25 MHz (3 of 8, network)" while it
+     * searches, "Channel 917.25 MHz" (its cell's anchor) once on a cell; null before
+     * contract v4 or before the first dwell.
+     */
+    val scanLabel: String?
+        get() {
+            val t = scan ?: return null
+            return when {
+                state == TerminalState.SEARCH && t.pos > 0 ->
+                    "Scanning ${t.mhzLabel} MHz (${t.pos} of ${t.len}, ${t.source?.label ?: "source ${t.sourceCode}"})"
+                state != TerminalState.SEARCH && t.freqKhz > 0 -> "Channel ${t.mhzLabel} MHz"
+                else -> null
+            }
+        }
+
+    /** Packs this status exactly like `oc_term_pack_status()` (27 bytes with [scan], else 20). Used by the simulator and tests. */
     fun encode(): ByteArray {
-        val buf = ByteBuffer.allocate(GattContract.STATUS_LEN).order(ByteOrder.LITTLE_ENDIAN)
+        val buf = ByteBuffer.allocate(if (scan != null) GattContract.STATUS_V4_LEN else GattContract.STATUS_LEN)
+            .order(ByteOrder.LITTLE_ENDIAN)
         buf.put(stateCode.toByte())
         buf.put(bandCode.toByte())
         buf.put(tierCode.toByte())
@@ -131,6 +151,12 @@ data class TerminalStatus(
         buf.putInt(tmid.toInt())
         buf.putInt(frame.toInt())
         buf.putInt(cellSeed.toInt())
+        scan?.let {
+            buf.put(it.pos.toByte())
+            buf.put(it.len.toByte())
+            buf.put(it.sourceCode.toByte())
+            buf.putInt(it.freqKhz.toInt())
+        }
         return buf.array()
     }
 
@@ -156,6 +182,16 @@ data class TerminalStatus(
                 frame = buf.getInt(12).toLong() and 0xFFFF_FFFFL,
                 cellSeed = buf.getInt(16).toLong() and 0xFFFF_FFFFL,
                 sigCode = buf.get(GattContract.STATUS_SIG).toInt() and 0xFF,
+                scan = if (raw.size >= GattContract.STATUS_V4_LEN) {
+                    ScanTail(
+                        pos = raw[20].toInt() and 0xFF,
+                        len = raw[21].toInt() and 0xFF,
+                        sourceCode = raw[22].toInt() and 0xFF,
+                        freqKhz = buf.getInt(23).toLong() and 0xFFFF_FFFFL,
+                    )
+                } else {
+                    null
+                },
             )
         }
 

@@ -3,10 +3,11 @@ package org.opencell.core.protocol
 import java.util.UUID
 
 /**
- * The terminal's BLE GATT contract v3 (v2 with numbering-v2 numbers: 8 BCD
- * bytes in EVENTs, any dialled form in DIAL), mirrored from
+ * The terminal's BLE GATT contract v4 (v3 with the scan list: the SCAN
+ * characteristic, COMMAND 0x07 and 7 more STATUS bytes; v3 is v2 with
+ * numbering-v2 numbers), mirrored from
  * `firmware/components/oc_term/include/oc_term_gatt.h` and the constants in
- * `firmware/components/oc_sig/include/oc_sig.h` (branch `numbers-v2`).
+ * `firmware/components/oc_sig/include/oc_sig.h` (opencell-firmware `main`).
  *
  * Keep this file in sync with those headers: it is the only place the app
  * hard-codes UUIDs, sizes and ATT error codes.
@@ -30,14 +31,26 @@ object GattContract {
     /** Notify: `ev (1) || args`, decoded by [TerminalEvent.decode]. */
     val EVENT: UUID = uuid(0x06)
 
+    /**
+     * Read: the terminal's scan list, decoded by [ScanList.decode] (up to [SCAN_MAX]
+     * bytes; Android does the long read). Contract v4: older firmware has no SCAN.
+     */
+    val SCAN: UUID = uuid(0x07)
+
     /** Client Characteristic Configuration Descriptor (Bluetooth SIG). */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     /** `OC_SIG_APP_MAX`: largest app data frame on UP and DOWN (contract v1 allowed 20). */
     const val MAX_PAYLOAD = 18
 
-    /** `OC_GATT_STATUS_LEN`. */
+    /** The shortest STATUS the app reads (contract v1-v3). */
     const val STATUS_LEN = 20
+
+    /** `OC_GATT_STATUS_LEN` in contract v4: [STATUS_LEN] plus the scan fields ([ScanTail]). */
+    const val STATUS_V4_LEN = 27
+
+    /** `OC_GATT_SCAN_MAX`: the longest SCAN value (27 entries). */
+    const val SCAN_MAX = 141
 
     /** `OC_GATT_STATUS_SIG`: the STATUS byte that holds the signalling state ([SigState]). */
     const val STATUS_SIG = 3
@@ -69,7 +82,11 @@ object GattContract {
     /** ATT 0x0D, invalid attribute value length: UP too long, or COMMAND of the wrong length. Never retry. */
     const val ATT_ERR_INVALID_LENGTH = 0x0D
 
-    /** ATT 0x81 (`OC_SIG_ATT_BAD_ARG`): a malformed COMMAND argument (QR text, number, confirmation byte). */
+    /**
+     * ATT 0x81 (`OC_SIG_ATT_BAD_ARG`): a malformed COMMAND argument (QR text, number, confirmation byte;
+     * SCAN: an off-grid frequency, more than 4 entries, a fallback value out of range, or firmware
+     * older than contract v4, which doesn't know op 0x07).
+     */
     const val ATT_ERR_BAD_ARG = 0x81
 
     /**
