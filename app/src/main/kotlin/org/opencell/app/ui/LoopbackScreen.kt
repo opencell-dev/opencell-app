@@ -123,8 +123,9 @@ private fun LoopbackForm(vm: MainViewModel, running: Boolean, connected: Boolean
                 val probe = cfg.payloadFor(0)
                 Text("First probe: \"${probe.decodeToString()}\" (${probe.size} B)", style = MonoStyle)
                 Text(
-                    "Needs the terminal in GRANTED (UP is refused with 0x80 without a grant). " +
-                        "Outside a call that means a test cell (ocbench cell) that keeps it granted.",
+                    "Needs the terminal in GRANTED (UP is refused with 0x80 without a grant), " +
+                        "and a Part 97 cell, or a connected call. Outside a call, Part 15 always " +
+                        "refuses UP with 0x80, even when granted: there's no key for it yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

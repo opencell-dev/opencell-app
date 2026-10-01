@@ -105,7 +105,12 @@ sealed interface WriteResult {
     /** UP: the terminal queued the frame for its next UL slot. COMMAND: the terminal took the command. */
     data object Accepted : WriteResult
 
-    /** ATT 0x80. UP: no grant, or the UL queue is full; retry later. COMMAND: not in the right state. */
+    /**
+     * ATT 0x80. UP: no grant, not in a connected call, in Part 15 also
+     * refused outside a connected call even with a grant (the media gate:
+     * there's no key for it yet), or the UL queue is full; retry later.
+     * COMMAND: not in the right state.
+     */
     data object NotNow : WriteResult
 
     /** ATT 0x0D: UP longer than the terminal's limit, or a COMMAND of the wrong length. Permanent. */
