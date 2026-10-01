@@ -59,8 +59,9 @@ data class SimTiming(
  * - UP takes app data frames into a 4-deep queue (0x80 when full or not granted,
  *   0x0D over 18 bytes), sends one per 120 ms frame, and the cell or the call's
  *   peer echoes each on DOWN after [echoDelay]; the media gate refuses UP with
- *   0x80 outside a connected call (`IN_CALL`) in Part 15, even when granted —
- *   only Part 97 keeps the diagnostic loopback outside a call;
+ *   0x80 outside a connected call (`IN_CALL`), even when granted, in either
+ *   mode — the Part 97 diagnostic loopback outside a call is gone (decision
+ *   #25, 2026-10-01);
  * - COMMANDs are checked like `oc_sig_term_command` (0x0D length, 0x81 argument,
  *   0x80 state), and EVENTs and STATUS byte 3 follow like the firmware's;
  * - STATUS is notified only with an EVENT or a radio state change, like the
@@ -439,10 +440,10 @@ class SimulatedTerminal(
                     closed -> WriteResult.NotConnected
                     payload.size > GattContract.MAX_PAYLOAD -> WriteResult.TooLong
                     radio != TerminalState.GRANTED -> WriteResult.NotNow
-                    // The media gate: in Part 15, UP is refused outside a connected
-                    // call even with a grant (no key for it yet). Part 97 keeps the
-                    // diagnostic loopback outside a call.
-                    mode == RegMode.PART15 && sig != SigState.IN_CALL -> WriteResult.NotNow
+                    // The media gate: UP is refused outside a connected call, even
+                    // with a grant, in either mode (decision #25, 2026-10-01: the
+                    // Part 97 diagnostic loopback outside a call is gone).
+                    sig != SigState.IN_CALL -> WriteResult.NotNow
                     queue.size >= 4 -> WriteResult.NotNow
                     else -> {
                         queue.addLast(payload.copyOf())
