@@ -182,6 +182,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val phoneSession = session.phone
     val callAudio = app.graph.callAudio
     val tonePlan = app.graph.tonePlan
+    val voiceCodec = app.graph.voiceCodec
     val phone = phoneSession.state
 
     // --- developer options ---

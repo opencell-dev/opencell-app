@@ -13,6 +13,7 @@ import org.opencell.app.audio.KeySound
 import org.opencell.app.audio.KeyTonePlayer
 import org.opencell.app.audio.KeypadTones
 import org.opencell.app.audio.TonePlanSetting
+import org.opencell.app.audio.VoiceCodecSetting
 import org.opencell.app.ble.BleScanner
 import org.opencell.app.ble.GattConnector
 import org.opencell.app.data.DeveloperUnlock
@@ -26,6 +27,7 @@ import org.opencell.core.link.Connector
 import org.opencell.core.session.TerminalSession
 import org.opencell.core.sim.SimulatedTerminal
 import org.opencell.core.voice.AudioIo
+import org.opencell.core.voice.VoiceCodecFactory
 
 /**
  * Manual dependency graph: one of each, living as long as the process.
@@ -53,6 +55,12 @@ class AppGraph(
     private val micAllowed = MutableStateFlow(false)
     val tonePlan = TonePlanSetting(prefs)
 
+    /** The voice codecs this build runs. */
+    private val voiceCodecs: VoiceCodecFactory = Codec2
+
+    /** Which of them calls offer and accept: Automatic or one (codec-negotiation spec §7.1). */
+    val voiceCodec = VoiceCodecSetting(prefs, voiceCodecs.codecs)
+
     /** Console, Loopback, the demo terminal and the voice stats line, behind a static code. */
     val developerAccess = DeveloperUnlock(prefs)
 
@@ -64,8 +72,8 @@ class AppGraph(
     val callLog = CallLog(PrefsCallLogStore(context.getSharedPreferences(PrefsCallLogStore.FILE, Context.MODE_PRIVATE)))
     val session: TerminalSession = TerminalSession(
         connector, scope, phoneMemory = PrefsPhoneMemory(prefs),
-        codecs = Codec2, audio = audio(context, route), micAllowed = micAllowed, tonePlan = tonePlan.plan,
-        callLog = callLog,
+        codecs = voiceCodecs, audio = audio(context, route), micAllowed = micAllowed, tonePlan = tonePlan.plan,
+        callLog = callLog, codecPreference = voiceCodec.choice,
     )
     val callAudio = CallAudio(session.voice, route, MutableStateFlow(false), micAllowed)
     /** Posts and clears the missed-call notification from the log's unseen count. */

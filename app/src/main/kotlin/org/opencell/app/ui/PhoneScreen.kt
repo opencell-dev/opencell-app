@@ -83,6 +83,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.opencell.app.audio.TonePlanSetting
+import org.opencell.app.audio.VoiceCodecSetting
 import org.opencell.app.ui.theme.MonoStyle
 import org.opencell.core.link.LinkState
 import org.opencell.core.link.LinkTarget
@@ -93,6 +94,7 @@ import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.RegMode
 import org.opencell.core.protocol.SigState
+import org.opencell.core.voice.CodecPreference
 import org.opencell.core.voice.TonePlans
 
 /** Which of the Phone tab's screens shows: the setup states in order, then the dial screen once registered. */
@@ -119,6 +121,7 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     var menu by rememberSaveable { mutableStateOf(false) }
     var confirmDeactivate by rememberSaveable { mutableStateOf(false) }
     var chooseTones by rememberSaveable { mutableStateOf(false) }
+    var chooseCodec by rememberSaveable { mutableStateOf(false) }
     var confirmClearLog by rememberSaveable { mutableStateOf(false) }
     val activated = phone.linkUp && phone.sig != null && phone.sig != SigState.NOT_ACTIVATED
     val stage = when {
@@ -164,6 +167,10 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                                 DropdownMenuItem(
                                     text = { Text("Call tones") },
                                     onClick = { menu = false; chooseTones = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Voice codec") },
+                                    onClick = { menu = false; chooseCodec = true },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Keypad tones") },
@@ -239,6 +246,7 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
     }
 
     if (chooseTones) CallTonesDialog(vm.tonePlan, onDismiss = { chooseTones = false })
+    if (chooseCodec) VoiceCodecDialog(vm.voiceCodec, onDismiss = { chooseCodec = false })
 
     if (confirmDeactivate) {
         AlertDialog(
@@ -747,6 +755,37 @@ private fun CallTonesDialog(setting: TonePlanSetting, onDismiss: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = choice == id, onClick = null)
+                        Text(label, Modifier.padding(start = 8.dp, top = 12.dp, bottom = 12.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+/** The voice codec setting (codec-negotiation spec §7.1): Automatic, or only one codec. No text field, so a platform dialog is fine. */
+@Composable
+private fun VoiceCodecDialog(setting: VoiceCodecSetting, onDismiss: () -> Unit) {
+    val choice by setting.choice.collectAsStateWithLifecycle()
+    val options = listOf<Pair<CodecPreference, String>>(CodecPreference.Automatic to "Automatic") +
+        setting.supported.map { CodecPreference.Only(it.id) to "Only ${it.choiceLabel}" }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Voice codec") },
+        text = {
+            Column {
+                Text(
+                    "The codecs this phone offers when it calls and accepts when it answers. " +
+                        "Each call uses the best one both ends have.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                options.forEach { (value, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().selectable(selected = choice == value, role = Role.RadioButton) { setting.set(value) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = choice == value, onClick = null)
                         Text(label, Modifier.padding(start = 8.dp, top = 12.dp, bottom = 12.dp))
                     }
                 }
