@@ -1,0 +1,41 @@
+OpenVoxNB (oc_vox) vendored by tools/openvox/vendor.sh. Do not edit: re-run the script.
+
+Upstream:  opencell-firmware (firmware/components/oc_vox)
+Commit:    52a84c9d558fc433b5680bc45fb5af6267ae0d94
+Version:   OC_VOX_VERSION 0
+Licence:   Apache License 2.0 (LICENSE), like the rest of OpenCell.
+Taken:     the production (fixed-point) sources, OC_VOX_SRCS in the component's
+           CMakeLists.txt, and the headers they include. Left behind: the float
+           reference (ref/, oc_vox_ref*), host tests, tools and the C++ wrapper.
+Written:   oc_vox_vendor.h (the commit) and, outside this directory,
+           src/main/kotlin/org/opencell/openvox/OpenVoxVendor.kt.
+
+Files:
+  LICENSE
+  fx/oc_vox_fx_analysis.c
+  fx/oc_vox_fx_dsp.c
+  fx/oc_vox_fx_int.h
+  fx/oc_vox_fx_synth.c
+  fx/oc_vox_fx_tables.c
+  include/oc_vox.h
+  include/oc_vox_bits.h
+  include/oc_vox_conceal.h
+  include/oc_vox_fec.h
+  include/oc_vox_int.h
+  include/oc_vox_layout.h
+  include/oc_vox_modes.h
+  include/oc_vox_pipe.h
+  include/oc_vox_state.h
+  include/oc_vox_stats.h
+  oc_vox.c
+  oc_vox_bits.c
+  oc_vox_cb.c
+  oc_vox_cb.h
+  oc_vox_conceal.c
+  oc_vox_fec.c
+  oc_vox_layout.c
+  oc_vox_modes.c
+  oc_vox_pipe.c
+  oc_vox_quant.c
+  oc_vox_quant.h
+  oc_vox_vendor.h
