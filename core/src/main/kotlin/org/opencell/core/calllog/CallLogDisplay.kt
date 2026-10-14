@@ -55,6 +55,7 @@ object CallLogDisplay {
      * how an unconnected outgoing call ended, then a dropped call's cause.
      * "Outgoing · 2:15", "Outgoing · Busy", "Outgoing · Cancelled",
      * "Incoming · 0:42 · Radio link lost", "Missed", "Rejected".
+     * "Missed · No shared voice codec" for a call this phone turned down (codec-negotiation spec §7.3).
      */
     fun detail(e: CallLogEntry): String {
         val parts = mutableListOf(e.kind.label)
@@ -71,6 +72,8 @@ object CallLogDisplay {
                 EndCause.NORMAL.code -> "Cancelled"
                 else -> causeText(e.causeCode)
             }
+        } else if (e.kind == CallKind.MISSED && e.causeCode == EndCause.NO_CODEC.code) {
+            parts += causeText(EndCause.NO_CODEC.code) // this phone turned it down: no codec both ends allow
         }
         return parts.joinToString(" · ")
     }

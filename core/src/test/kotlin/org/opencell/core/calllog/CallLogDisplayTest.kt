@@ -107,4 +107,11 @@ class CallLogDisplayTest {
             CallLogDisplay.spoken(entry(1, connectedFor = 135_000), "09:00"),
         )
     }
+
+    @Test
+    fun aCallTurnedDownForWantOfACodecSaysSo() {
+        assertEquals("Missed · No shared voice codec", CallLogDisplay.detail(entry(1, CallKind.MISSED, cause = EndCause.NO_CODEC.code)))
+        assertEquals("Missed", CallLogDisplay.detail(entry(2, CallKind.MISSED, cause = EndCause.NORMAL.code)))
+        assertEquals("Outgoing · No shared voice codec", CallLogDisplay.detail(entry(3, CallKind.OUTGOING, cause = EndCause.NO_CODEC.code)))
+    }
 }

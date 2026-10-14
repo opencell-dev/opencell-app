@@ -371,8 +371,8 @@ class PhoneSession(
     private fun refusal(cmd: Command, r: WriteResult): String = when (r) {
         WriteResult.NotNow -> when (cmd) {
             is Command.Activate -> "The terminal can't activate now (it is activating or in a call)"
-            is Command.Dial -> "The terminal can't place a call now (it must be registered and not in a call)"
-            Command.Answer -> "There is no incoming call to answer"
+            is Command.Dial, is Command.DialCaps -> "The terminal can't place a call now (it must be registered and not in a call)"
+            Command.Answer, is Command.AnswerCodec -> "There is no incoming call to answer"
             Command.Reject -> "There is no incoming call to reject"
             Command.Hangup -> "There is no call to hang up"
             Command.Deactivate -> "The terminal can't deactivate during a call"

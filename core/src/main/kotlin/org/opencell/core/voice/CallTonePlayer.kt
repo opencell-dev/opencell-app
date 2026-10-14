@@ -28,7 +28,7 @@ data class ToneCue(val tone: CallTone, val maxMillis: Long?, val key: Long)
  *
  * - Ringback while an outgoing call is RINGING (the far end got ALERTING) and the terminal is connected.
  * - After an outgoing call ends before it connected: busy for "busy" and
- *   "rejected", unobtainable for "unreachable", reorder for "no answer",
+ *   "rejected", unobtainable for "unreachable", reorder for "no answer", "no shared voice codec",
  *   "network failure", "link lost" and causes this app doesn't know; nothing
  *   for "normal" (the user hung up).
  * - After a connected call (either way) ends with "network failure" or "link

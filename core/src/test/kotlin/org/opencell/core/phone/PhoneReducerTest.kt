@@ -64,7 +64,7 @@ class PhoneReducerTest {
     @Test
     fun invalidIncomingNumberIsAnUnknownCaller() {
         val s = run(registered, ev(TerminalEvent.Incoming(9, null)))
-        assertEquals(Call(9, Direction.INCOMING, null, CallPhase.INCOMING), s.call)
+        assertEquals(Call(9, Direction.INCOMING, null, CallPhase.INCOMING, awaitingCaps = true), s.call)
     }
 
     @Test
@@ -107,7 +107,7 @@ class PhoneReducerTest {
     @Test
     fun incomingCallAnsweredThenEndedByTheFarEnd() {
         val ringing = run(registered, ev(TerminalEvent.Incoming(9, peer)))
-        assertEquals(Call(9, Direction.INCOMING, peer, CallPhase.INCOMING), ringing.call)
+        assertEquals(Call(9, Direction.INCOMING, peer, CallPhase.INCOMING, awaitingCaps = true), ringing.call)
         assertEquals(SigState.RINGING_IN, ringing.sig)
         val answering = run(ringing, PhoneInput.Answering)
         assertTrue(answering.call!!.answering)
@@ -262,7 +262,7 @@ class PhoneReducerTest {
     @Test
     fun resyncIntoAStillRingingCallForgetsTheOldCallerSoALaterEndedIsAccepted() {
         val ringing = run(registered, ev(TerminalEvent.Incoming(5, peer)))
-        assertEquals(Call(5, Direction.INCOMING, peer, CallPhase.INCOMING), ringing.call)
+        assertEquals(Call(5, Direction.INCOMING, peer, CallPhase.INCOMING, awaitingCaps = true), ringing.call)
         val s = run(ringing, PhoneInput.LinkDown, PhoneInput.Resync(SigState.RINGING_IN))
         assertEquals(Call(null, Direction.INCOMING, null, CallPhase.INCOMING), s.call)
         val ended = run(s, ev(TerminalEvent.Ended(6, 2)))
@@ -407,5 +407,68 @@ class PhoneReducerTest {
         val held = PhoneReducer.reduce(calling, PhoneInput.Status(SigState.REGISTERED), 10_500)
         assertEquals(10_000 + PhoneReducer.RECONCILE_GRACE_MS, PhoneReducer.reconcileDueAt(held))
         assertNull(PhoneReducer.reconcileDueAt(held.copy(linkUp = false)))
+    }
+
+    /** Codec-negotiation spec §7.3: CALL_CAPS is stored with the ringing call, which may ring once it has them. */
+    @Test
+    fun callCapsAreKeptWithTheRingingCall() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(9, peer)))
+        assertTrue(ringing.call!!.awaitingCaps)
+        assertTrue(ringing.call!!.silent)
+        val withCaps = run(ringing, ev(TerminalEvent.CallCaps(9, 0x03)))
+        assertEquals(0x03, withCaps.call?.caps)
+        assertFalse(withCaps.call!!.silent)
+    }
+
+    @Test
+    fun callCapsForAnotherCallAreIgnored() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(9, peer)))
+        val s = run(ringing, ev(TerminalEvent.CallCaps(8, 0x01)))
+        assertNull(s.call?.caps)
+        assertTrue(s.call!!.awaitingCaps)
+        assertEquals(registered, run(registered, ev(TerminalEvent.CallCaps(9, 0x01)))) // no call: nothing changes
+    }
+
+    /** Firmware from before negotiation sends no CALL_CAPS: the call rings once the wait is over. */
+    @Test
+    fun withoutCallCapsTheCallRingsOnceTheWaitIsOver() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(9, peer)))
+        assertEquals(ringing, run(ringing, PhoneInput.CapsWaitOver(8))) // another call's wait
+        val s = run(ringing, PhoneInput.CapsWaitOver(9))
+        assertFalse(s.call!!.silent)
+        assertNull(s.call?.caps)
+    }
+
+    @Test
+    fun aDeclinedCallStaysSilentThroughItsEnd() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(9, peer)), ev(TerminalEvent.CallCaps(9, 0x02)))
+        val declined = run(ringing, PhoneInput.Declining)
+        assertTrue(declined.call!!.declined)
+        assertTrue(declined.call!!.silent)
+        assertEquals(CallPhase.INCOMING, declined.call?.phase)
+        val ended = run(declined, ev(TerminalEvent.Ended(9, EndCause.NO_CODEC.code)))
+        assertEquals(EndCause.NO_CODEC, ended.call?.cause)
+        assertTrue(ended.call!!.silent)
+        assertEquals("No shared voice codec", ended.call?.endText)
+    }
+
+    /** Review focus 3: after a reconnect the ringing call may not be the same one, so its caps go with its caller. */
+    @Test
+    fun aResyncForgetsTheCallsCaps() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(5, peer)), ev(TerminalEvent.CallCaps(5, 0x01)))
+        val s = run(ringing, PhoneInput.LinkDown, PhoneInput.Resync(SigState.RINGING_IN))
+        assertEquals(Call(null, Direction.INCOMING, null, CallPhase.INCOMING), s.call)
+        assertFalse(s.call!!.silent)
+    }
+
+    /** Answered, ended or released within the wait (the user saw it some other way, or the caller gave up), the call is no longer silent. */
+    @Test
+    fun aCallThatLeavesIncomingIsNoLongerWaitingForCaps() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(9, peer)))
+        assertFalse(run(ringing, PhoneInput.Answering).call!!.silent)
+        val ended = run(ringing, ev(TerminalEvent.Ended(9, EndCause.NORMAL.code)))
+        assertFalse(ended.call!!.awaitingCaps)
+        assertFalse(ended.call!!.silent)
+        assertFalse(run(ringing, PhoneInput.Releasing).call!!.silent)
     }
 }

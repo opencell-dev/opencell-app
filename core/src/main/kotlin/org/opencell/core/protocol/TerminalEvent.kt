@@ -34,7 +34,10 @@ enum class EndCause(val code: Int, val text: String) {
     NO_ANSWER(3, "No answer"),
     UNREACHABLE(4, "Number unreachable"),
     NETWORK_FAILURE(5, "Network failure"),
-    LINK_LOST(6, "Radio link lost");
+    LINK_LOST(6, "Radio link lost"),
+
+    /** Codec-negotiation spec §5.3: the two ends have no voice codec in common. */
+    NO_CODEC(7, "No shared voice codec");
 
     companion object {
         fun fromCode(code: Int): EndCause? = entries.firstOrNull { it.code == code }
@@ -118,6 +121,13 @@ sealed interface TerminalEvent {
         override fun encode() = byteArrayOf(code.toByte()) + u32(callId) + causeCode.toByte()
     }
 
+    /** CALL_CAPS (codec-negotiation spec §5.2): the caller's `codec_caps` for incoming call [callId], right after INCOMING. */
+    data class CallCaps(val callId: Long, val caps: Int) : TerminalEvent {
+        override val code get() = CALL_CAPS
+        override val label get() = "call $callId offers codecs 0x%02X".format(caps)
+        override fun encode() = byteArrayOf(code.toByte()) + u32(callId) + caps.toByte()
+    }
+
     /**
      * ACTIVATED, REGISTERED or INCOMING at its contract-v2 length (7-byte
      * numbers): the terminal runs firmware from before numbering v2. Shown,
@@ -151,6 +161,7 @@ sealed interface TerminalEvent {
         const val CONNECTED = 0x07
         const val ENDED = 0x08
         const val DEACTIVATED = 0x09
+        const val CALL_CAPS = 0x0A
 
         const val OLD_FIRMWARE_TEXT = "Terminal firmware uses old numbers: update it"
 
@@ -192,6 +203,7 @@ sealed interface TerminalEvent {
                 CONNECTED -> if (n >= 5) Connected(u32(raw, 1), u8(5)) else unknown
                 ENDED -> if (n >= 5) Ended(u32(raw, 1), u8(5)) else unknown
                 DEACTIVATED -> Deactivated
+                CALL_CAPS -> if (n >= 5) CallCaps(u32(raw, 1), u8(5)) else unknown
                 else -> unknown
             }
         }

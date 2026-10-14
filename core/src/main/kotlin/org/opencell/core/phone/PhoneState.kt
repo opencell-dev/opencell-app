@@ -40,8 +40,17 @@ data class Call(
     val connectedAt: Long? = null,
     /** CONNECTED's voice codec id ([org.opencell.core.voice.CodecId]); null when the app learned of the call from STATUS alone. */
     val codec: Int? = null,
+    /** CALL_CAPS for this incoming call: the caller's `codec_caps`. Null until it comes (firmware from before negotiation never sends it). */
+    val caps: Int? = null,
+    /** An INCOMING whose CALL_CAPS hasn't come yet: not rung, notified or shown for up to [PhoneSession.CAPS_WAIT_MS]. */
+    val awaitingCaps: Boolean = false,
+    /** The phone is turning this incoming call down, with no codec in common (ANSWER_CODEC 0): never rung or shown. */
+    val declined: Boolean = false,
 ) {
     val cause: EndCause? get() = causeCode?.let { EndCause.fromCode(it) }
+
+    /** Not rung, notified or shown: waiting for its caps, or turned down for want of a codec (codec-negotiation spec §7.3). */
+    val silent: Boolean get() = awaitingCaps || declined
 
     /** What the ended screen says. */
     val endText: String
@@ -148,6 +157,12 @@ sealed interface PhoneInput {
     /** The terminal accepted ANSWER. */
     data object Answering : PhoneInput
 
+    /** [PhoneSession.CAPS_WAIT_MS] after INCOMING [callId] without CALL_CAPS (firmware from before negotiation): it may ring. */
+    data class CapsWaitOver(val callId: Long) : PhoneInput
+
+    /** The phone sent ANSWER_CODEC 0 for the ringing call: no codec in common (ENDED with cause 7 follows). */
+    data object Declining : PhoneInput
+
     /** The terminal accepted HANGUP or REJECT. */
     data object Releasing : PhoneInput
 
@@ -186,7 +201,13 @@ object PhoneReducer {
      * [wallNow] is wall-clock millis, used only for what's displayed ([Call.connectedAt]).
      */
     fun reduce(s: PhoneState, input: PhoneInput, now: Long, wallNow: Long = now): PhoneState =
-        reconcileIfDue(apply(s, input, now, wallNow), now, wallNow)
+        settled(reconcileIfDue(apply(s, input, now, wallNow), now, wallNow))
+
+    /** A call that has left INCOMING is no longer waiting for its CALL_CAPS (and so no longer silent, unless declined). */
+    private fun settled(s: PhoneState): PhoneState {
+        val c = s.call ?: return s
+        return if (c.awaitingCaps && c.phase != CallPhase.INCOMING) s.copy(call = c.copy(awaitingCaps = false)) else s
+    }
 
     /**
      * When a STATUS held back by [RECONCILE_GRACE_MS] will next need reconciling
@@ -226,7 +247,11 @@ object PhoneReducer {
             notice = null,
         )
         PhoneInput.Answering -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING }
-            ?.let { s.copy(call = it.copy(answering = true), callChangedAt = now) } ?: s
+            ?.let { s.copy(call = it.copy(answering = true, awaitingCaps = false), callChangedAt = now) } ?: s
+        is PhoneInput.CapsWaitOver -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING && it.id == input.callId && it.awaitingCaps }
+            ?.let { s.copy(call = it.copy(awaitingCaps = false)) } ?: s
+        PhoneInput.Declining -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING }
+            ?.let { s.copy(call = it.copy(declined = true, awaitingCaps = false), callChangedAt = now) } ?: s
         PhoneInput.Releasing -> s.activeCall?.let {
             s.copy(sig = SigState.RELEASING, call = it.copy(phase = CallPhase.RELEASING), callChangedAt = now)
         } ?: s
@@ -255,7 +280,7 @@ object PhoneReducer {
         is TerminalEvent.RegistrationFailed -> s.copy(regFailureCode = e.reasonCode)
         is TerminalEvent.Incoming -> s.copy(
             sig = SigState.RINGING_IN,
-            call = Call(e.callId, Direction.INCOMING, e.caller, CallPhase.INCOMING),
+            call = Call(e.callId, Direction.INCOMING, e.caller, CallPhase.INCOMING, awaitingCaps = true),
             callSerial = s.callSerial + 1,
             callChangedAt = now,
         )
@@ -300,6 +325,8 @@ object PhoneReducer {
         TerminalEvent.Deactivated -> PhoneState(linkUp = s.linkUp, sig = SigState.NOT_ACTIVATED)
         is TerminalEvent.OldFirmware -> s.copy(notice = TerminalEvent.OLD_FIRMWARE_TEXT)
         is TerminalEvent.Unknown -> s
+        is TerminalEvent.CallCaps -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING && it.id == e.callId }
+            ?.let { s.copy(call = it.copy(caps = e.caps, awaitingCaps = false)) } ?: s
     }
 
     private fun resync(s: PhoneState, r: PhoneInput.Resync, now: Long, wallNow: Long): PhoneState {
@@ -325,7 +352,8 @@ object PhoneReducer {
         // app never saw the INCOMING for be accepted instead of ignored as "for an earlier call".
         val call = reconciled.call
         return if (call != null && call.phase == CallPhase.INCOMING && (call.id != null || call.peer != null)) {
-            reconciled.copy(call = call.copy(id = null, peer = null), callChangedAt = now)
+            // Its CALL_CAPS go too: they were the old call's (Answer then sends plain ANSWER, codec 1).
+            reconciled.copy(call = call.copy(id = null, peer = null, caps = null, awaitingCaps = false), callChangedAt = now)
         } else {
             reconciled
         }

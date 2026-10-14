@@ -169,4 +169,10 @@ class CallTonePlayerTest {
         advanceTimeBy(1_000)
         assertEquals(2, audio.speakers.size)
     }
+
+    @Test
+    fun noSharedCodecPlaysReorderToTheCallerOnly() {
+        assertEquals(CallTone.REORDER, ended(EndCause.NO_CODEC))
+        assertNull(ended(EndCause.NO_CODEC, Direction.INCOMING)) // the callee's phone turned it down: nothing to hear
+    }
 }

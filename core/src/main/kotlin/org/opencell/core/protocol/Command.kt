@@ -38,6 +38,27 @@ sealed interface Command {
         override fun encode() = byteArrayOf(op.toByte())
     }
 
+    /**
+     * DIAL_CAPS (codec-negotiation spec §5.1): the codecs this phone allows for the call
+     * ([caps], a `codec_caps` bitmap, never 0), then DIAL's number. Firmware from before
+     * negotiation refuses it as an unknown command (0x81); newer firmware never does.
+     */
+    data class DialCaps(val caps: Int, val number: String) : Command {
+        override val op get() = DIAL_CAPS
+        override val label get() = "DIAL_CAPS 0x%02X %s".format(caps, number)
+        override fun encode() = byteArrayOf(op.toByte(), caps.toByte()) + number.toByteArray(Charsets.US_ASCII)
+    }
+
+    /**
+     * ANSWER_CODEC (§5.1): answer with [codec], one of the caller's CALL_CAPS. Codec 0
+     * ([org.opencell.core.voice.CodecId.NONE]) turns the call down: no shared codec, cause 7.
+     */
+    data class AnswerCodec(val codec: Int) : Command {
+        override val op get() = ANSWER_CODEC
+        override val label get() = "ANSWER_CODEC $codec"
+        override fun encode() = byteArrayOf(op.toByte(), codec.toByte())
+    }
+
     data object Reject : Command {
         override val op get() = REJECT
         override val label get() = "REJECT"
@@ -101,6 +122,8 @@ sealed interface Command {
         const val HANGUP = 0x05
         const val DEACTIVATE = 0x06
         const val SCAN = 0x07
+        const val DIAL_CAPS = 0x08
+        const val ANSWER_CODEC = 0x09
         const val SCAN_SET_USER = 0x01
         const val SCAN_SET_FALLBACK = 0x02
         const val SCAN_FORGET_LEARNED = 0x03

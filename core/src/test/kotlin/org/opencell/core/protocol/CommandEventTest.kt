@@ -2,7 +2,9 @@ package org.opencell.core.protocol
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.opencell.core.voice.CodecId
 
 /**
  * Golden bytes for COMMAND and EVENT (contract v3: 8-byte numbers), consistent
@@ -126,5 +128,33 @@ class CommandEventTest {
     @Test
     fun trailingBytesAreIgnored() {
         assertEquals(TerminalEvent.Ringing(7), TerminalEvent.decode(bytes("06 00 00 00 07 99 99")))
+    }
+
+    /** Codec-negotiation spec §5: two commands, one event, one cause. */
+    @Test
+    fun codecNegotiationCommandsAndEvent() {
+        assertEquals(
+            "08 01 2b 38 38 33 31 36 30 36 35 35 35 30 30 31 30 30",
+            hex(Command.DialCaps(0x01, "+883160655500100").encode()),
+        )
+        assertEquals("DIAL_CAPS 0x21 +883160655500100", Command.DialCaps(0x21, "+883160655500100").label)
+        assertEquals("09 06", hex(Command.AnswerCodec(6).encode()))
+        assertEquals("09 00", hex(Command.AnswerCodec(CodecId.NONE).encode()))
+        assertEquals(TerminalEvent.CallCaps(5, 0x21), TerminalEvent.decode(bytes("0a 00 00 00 05 21")))
+        assertEquals("0a 00 00 00 05 21", hex(TerminalEvent.CallCaps(5, 0x21).encode()))
+        assertEquals(TerminalEvent.CallCaps(5, 0x01), TerminalEvent.decode(bytes("0a 00 00 00 05 01 ff"))) // a later field is ignored
+        assertTrue(TerminalEvent.decode(bytes("0a 00 00 00 05")) is TerminalEvent.Unknown) // too short
+    }
+
+    /** CALL_CAPS is its own event, so INCOMING keeps the exact length that tells v3 firmware from v2 (§5.2). */
+    @Test
+    fun incomingStillNeedsItsExactLength() {
+        assertTrue(TerminalEvent.decode(bytes("05 00 00 00 01 88 31 60 65 55 00 10 0f 01")) is TerminalEvent.Unknown)
+    }
+
+    @Test
+    fun causeSevenIsNoSharedCodec() {
+        assertEquals(EndCause.NO_CODEC, EndCause.fromCode(7))
+        assertEquals("No shared voice codec", TerminalEvent.Ended(1, 7).cause?.text)
     }
 }

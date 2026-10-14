@@ -149,7 +149,7 @@ class CallFlowTest {
         connect(b)
         assertTrue(b.sim.incomingCall(peer))
         advanceTimeBy(100)
-        assertEquals(Call(1, Direction.INCOMING, peer, CallPhase.INCOMING), b.state.call)
+        assertEquals(Call(1, Direction.INCOMING, peer, CallPhase.INCOMING, awaitingCaps = true), b.state.call)
         b.phone.answer()
         advanceTimeBy(1_000)
         assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
