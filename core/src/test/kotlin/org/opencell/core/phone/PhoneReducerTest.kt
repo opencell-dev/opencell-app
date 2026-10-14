@@ -461,6 +461,19 @@ class PhoneReducerTest {
         assertFalse(s.call!!.silent)
     }
 
+    /** The link drops while a call is being turned down: whatever rings after the reconnect, even a different caller, must ring. */
+    @Test
+    fun aResyncForgetsThatTheCallWasBeingTurnedDown() {
+        val ringing = run(registered, ev(TerminalEvent.Incoming(5, peer)), ev(TerminalEvent.CallCaps(5, 0x02)), PhoneInput.Declining)
+        assertTrue(ringing.call!!.declined)
+        val back = run(ringing, PhoneInput.LinkDown, PhoneInput.Resync(SigState.RINGING_IN))
+        assertFalse(back.call!!.declined)
+        assertFalse(back.call!!.silent)
+        val other = run(back, ev(TerminalEvent.Ended(5, EndCause.NORMAL.code)), ev(TerminalEvent.Incoming(6, peer)), ev(TerminalEvent.CallCaps(6, 0x01)))
+        assertFalse(other.call!!.silent)
+        assertEquals(6L, other.call?.id)
+    }
+
     /** Answered, ended or released within the wait (the user saw it some other way, or the caller gave up), the call is no longer silent. */
     @Test
     fun aCallThatLeavesIncomingIsNoLongerWaitingForCaps() {

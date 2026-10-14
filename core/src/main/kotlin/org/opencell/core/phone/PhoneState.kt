@@ -352,8 +352,9 @@ object PhoneReducer {
         // app never saw the INCOMING for be accepted instead of ignored as "for an earlier call".
         val call = reconciled.call
         return if (call != null && call.phase == CallPhase.INCOMING && (call.id != null || call.peer != null)) {
-            // Its CALL_CAPS go too: they were the old call's (Answer then sends plain ANSWER, codec 1).
-            reconciled.copy(call = call.copy(id = null, peer = null, caps = null, awaitingCaps = false), callChangedAt = now)
+            // Its CALL_CAPS go too: they were the old call's (Answer then sends plain ANSWER, codec 1). So does
+            // "being turned down": whatever rings after the reconnect, even a different caller, must not stay silent.
+            reconciled.copy(call = call.copy(id = null, peer = null, caps = null, awaitingCaps = false, declined = false), callChangedAt = now)
         } else {
             reconciled
         }
