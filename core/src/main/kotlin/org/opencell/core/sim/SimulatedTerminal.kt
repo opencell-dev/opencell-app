@@ -30,6 +30,7 @@ import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalState
 import org.opencell.core.protocol.TerminalStatus
+import org.opencell.core.voice.CodecId
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -83,7 +84,13 @@ data class SimTiming(
  *   `oc_term_gatt_scan_command` (refusing two user entries with the same frequency and FIXED
  *   flag), and STATUS carries the scan tail. SCAN itself carries every stored entry, so a user
  *   entry equal to the last serving cell is kept and shown twice; only the search walk that
- *   drives the STATUS tail dedupes it away.
+ *   drives the STATUS tail dedupes it away;
+ * - codec negotiation (codec-negotiation spec §5): DIAL_CAPS and ANSWER_CODEC are checked like
+ *   the firmware's (0x0D for any bad argument, never 0x81), every INCOMING is followed by
+ *   CALL_CAPS, and the far end answers an outgoing call with the best codec in the caller's caps
+ *   that it has ([peerCaps]), or releases it with cause 7. [codecNegotiation] false behaves like
+ *   firmware from before it: DIAL_CAPS and ANSWER_CODEC are unknown commands (0x81), no CALL_CAPS,
+ *   every call Codec2 1200.
  *
  * Signalling state lives here, not in the connection, so a test can drop the
  * BLE link ([dropLink]) and reconnect to a terminal that carried on without it.
@@ -125,6 +132,9 @@ class SimulatedTerminal(
     /** HANGUP came while CALLING before CALL_PROC: release once the call id arrives (the firmware's hangup_pending). */
     private var hangupPending = false
 
+    /** This call's `codec_caps`: what DIAL_CAPS offered (plain DIAL: Codec2 1200), or the incoming caller's. */
+    private var callCaps = CodecId.bit(CodecId.CODEC2_1200)
+
     // --- the scan list (oc_term_scan), all under the lock ---
     private val userChannels = mutableListOf<ScanEntry>()
     private var fallbackAfter = 2
@@ -147,6 +157,14 @@ class SimulatedTerminal(
     /** False makes this behave like v3 firmware with no SCAN characteristic, for tests. */
     @Volatile
     var scanSupported: Boolean = true
+
+    /** False makes this behave like firmware from before codec negotiation, for tests (see the class KDoc). */
+    @Volatile
+    var codecNegotiation: Boolean = true
+
+    /** The far end's codecs (the echoing cell, or the called peer): it answers with the best one in the caller's caps. */
+    @Volatile
+    var peerCaps: Int = 0xFF
 
     /** The signalling state (STATUS byte 3), for tests. */
     val sigState: SigState get() = synchronized(lock) { sig }
@@ -175,13 +193,18 @@ class SimulatedTerminal(
         )
     }
 
-    /** Someone calls this terminal (the stand-in's `--call-in`). False unless it is registered and idle. */
-    fun incomingCall(caller: String = PEER): Boolean = synchronized(lock) {
+    /**
+     * Someone calls this terminal (the stand-in's `--call-in`), offering [caps] (CALL_CAPS, right
+     * after INCOMING). False unless it is registered and idle.
+     */
+    fun incomingCall(caller: String = PEER, caps: Int = CodecId.bit(CodecId.CODEC2_1200)): Boolean = synchronized(lock) {
         if (sig != SigState.REGISTERED) return false
         callId = nextCallId++
         answered = false
         sig = SigState.RINGING_IN
+        callCaps = if (codecNegotiation) caps else CodecId.bit(CodecId.CODEC2_1200)
         emit(TerminalEvent.Incoming(callId, caller))
+        if (codecNegotiation) emit(TerminalEvent.CallCaps(callId, caps))
         later(timing.ringTimeout) {
             // Like the firmware (oc_sig_term.c): an unanswered incoming call goes
             // RINGING_IN -> RELEASING (no EVENT, so no STATUS notification either) and
@@ -299,14 +322,30 @@ class SimulatedTerminal(
             else -> {
                 sig = SigState.RINGING_OUT
                 emit(TerminalEvent.Ringing(callId))
-                later(timing.peerAnswers) { connectCall() }
+                later(timing.peerAnswers) { peerAnswers() }
             }
         }
     }
 
-    private fun connectCall() {
+    /** The far end answers an outgoing call with the best codec in the caller's caps that it has; with none, cause 7 (§6.3). */
+    private fun peerAnswers() {
+        val codec = if (codecNegotiation) CodecId.best(callCaps and peerCaps) else CodecId.CODEC2_1200
+        if (codec == CodecId.NONE) end(EndCause.NO_CODEC) else connectCall(codec)
+    }
+
+    /** This phone answered an incoming call with [codec]: CONNECTED, or (0, or a codec the caller lacks) a release with cause 7. */
+    private fun answerWith(codec: Int) {
+        if (codec == CodecId.NONE || !CodecId.inCaps(callCaps, codec)) {
+            sig = SigState.RELEASING
+            later(timing.release) { end(EndCause.NO_CODEC) }
+        } else {
+            later(timing.answer) { connectCall(codec) }
+        }
+    }
+
+    private fun connectCall(codec: Int) {
         sig = SigState.IN_CALL
-        emit(TerminalEvent.Connected(callId, 1))
+        emit(TerminalEvent.Connected(callId, codec))
     }
 
     private fun end(cause: EndCause) {
@@ -337,13 +376,32 @@ class SimulatedTerminal(
                 if (a.isEmpty() || a.size > GattContract.DIAL_MAX) return WriteResult.TooLong
                 if (sig != SigState.REGISTERED) return WriteResult.NotNow
                 val called = PhoneNumber.normalize(a.decodeToString(), number) ?: return WriteResult.BadArgument
+                callCaps = CodecId.bit(CodecId.CODEC2_1200) // plain DIAL means Codec2 1200 (§5.1)
+                startOutgoing(called)
+            }
+            Command.DIAL_CAPS -> {
+                if (!codecNegotiation) return WriteResult.BadArgument // an unknown command to older firmware
+                // §5.1: every argument problem is 0x0D, never 0x81 (which means "unknown command"); ruling R6.
+                if (a.size < 2 || a[0].toInt() == 0 || a.size - 1 > GattContract.DIAL_MAX) return WriteResult.TooLong
+                if (sig != SigState.REGISTERED) return WriteResult.NotNow
+                val called = PhoneNumber.normalize(a.copyOfRange(1, a.size).decodeToString(), number) ?: return WriteResult.TooLong
+                callCaps = a[0].toInt() and 0xFF
                 startOutgoing(called)
             }
             Command.ANSWER -> {
                 if (a.isNotEmpty()) return WriteResult.TooLong
                 if (sig != SigState.RINGING_IN || answered) return WriteResult.NotNow
                 answered = true
-                later(timing.answer) { connectCall() }
+                answerWith(CodecId.CODEC2_1200) // plain ANSWER means Codec2 1200: a caller without it gets cause 7 (§5.1)
+            }
+            Command.ANSWER_CODEC -> {
+                if (!codecNegotiation) return WriteResult.BadArgument
+                if (a.size != 1) return WriteResult.TooLong
+                if (sig != SigState.RINGING_IN || answered) return WriteResult.NotNow
+                val codec = a[0].toInt() and 0xFF
+                if (codec != CodecId.NONE && !CodecId.inCaps(callCaps, codec)) return WriteResult.TooLong // not offered
+                answered = true
+                answerWith(codec)
             }
             Command.REJECT, Command.HANGUP -> {
                 if (a.isNotEmpty()) return WriteResult.TooLong

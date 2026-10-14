@@ -4,11 +4,14 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.opencell.core.calllog.CallKind
+import org.opencell.core.fakes.FakeCodecs
 import org.opencell.core.link.ConnectException
 import org.opencell.core.link.Connector
 import org.opencell.core.link.LinkState
@@ -23,6 +26,9 @@ import org.opencell.core.session.ConsoleKind
 import org.opencell.core.session.TerminalSession
 import org.opencell.core.sim.SimTiming
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecPreference
+import org.opencell.core.voice.VoiceCodecFactory
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 
@@ -39,11 +45,22 @@ class CallFlowTest {
         val state get() = session.phone.state.value
     }
 
-    private fun TestScope.bench(activated: Boolean, mode: RegMode = RegMode.PART15, timing: SimTiming = SimTiming()): Bench {
+    private fun TestScope.bench(
+        activated: Boolean,
+        mode: RegMode = RegMode.PART15,
+        timing: SimTiming = SimTiming(),
+        codecs: VoiceCodecFactory = VoiceCodecFactory.NONE,
+    ): Bench {
         val sim = SimulatedTerminal(backgroundScope, activatedNumber = if (activated) me else null, mode = mode, timing = timing)
-        val session = TerminalSession(sim, backgroundScope, testScheduler.timeSource, { testScheduler.currentTime })
+        val session = TerminalSession(
+            sim, backgroundScope, testScheduler.timeSource, { testScheduler.currentTime },
+            codecs = codecs, codecPreference = MutableStateFlow(CodecPreference.Automatic),
+        )
         return Bench(sim, session)
     }
+
+    /** Codec2 1200 and LPCNet 1733: two codecs, so the ranking has something to choose. */
+    private val both = FakeCodecs(setOf(CodecId.CODEC2_1200, CodecId.LPCNET_1733))
 
     private suspend fun TestScope.connect(b: Bench) {
         b.session.connect(LinkTarget(SimulatedTerminal.ADDRESS, b.sim.name))
@@ -149,7 +166,7 @@ class CallFlowTest {
         connect(b)
         assertTrue(b.sim.incomingCall(peer))
         advanceTimeBy(100)
-        assertEquals(Call(1, Direction.INCOMING, peer, CallPhase.INCOMING, awaitingCaps = true), b.state.call)
+        assertEquals(Call(1, Direction.INCOMING, peer, CallPhase.INCOMING, caps = 0x01), b.state.call)
         b.phone.answer()
         advanceTimeBy(1_000)
         assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
@@ -348,5 +365,97 @@ class CallFlowTest {
         advanceTimeBy(31_000) // the terminal's retry
         assertEquals(SigState.REGISTERED, b.state.sig)
         assertNull(b.state.regFailure)
+    }
+
+    /** Codec negotiation end to end (§4): DIAL_CAPS out, and the far end answers with the best codec both have. */
+    @Test
+    fun theFarEndAnswersWithTheBestSharedCodec() = runTest {
+        val b = bench(activated = true, codecs = both)
+        connect(b)
+        b.phone.dial(peer)
+        advanceTimeBy(5_000) // setup 0.4 s, the peer answers after 3 s
+        assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
+        assertEquals(CodecId.LPCNET_1733, b.state.call?.codec)
+        assertTrue(b.session.console.entries.value.any { it.text == "COMMAND DIAL_CAPS 0x03 $peer: accepted" })
+    }
+
+    @Test
+    fun callWithOneCodecIsWhatTheCallUses() = runTest {
+        val b = bench(activated = true, codecs = both)
+        connect(b)
+        b.phone.dial(peer, CodecPreference.Only(CodecId.CODEC2_1200))
+        advanceTimeBy(5_000)
+        assertEquals(CodecId.CODEC2_1200, b.state.call?.codec)
+    }
+
+    /** Review focus 4, the caller's side: reorder (CallTonePlayerTest) and these words. */
+    @Test
+    fun aFarEndWithNoSharedCodecEndsTheCallWithCause7() = runTest {
+        val b = bench(activated = true)
+        connect(b)
+        b.sim.peerCaps = CodecId.bit(CodecId.LPCNET_1733)
+        b.phone.dial(peer)
+        advanceTimeBy(5_000)
+        assertEquals(CallPhase.ENDED, b.state.call?.phase)
+        assertEquals(EndCause.NO_CODEC, b.state.call?.cause)
+        assertEquals("No shared voice codec", b.state.call?.endText)
+    }
+
+    /** Review focus 1 (§7.2, §8): the new app against firmware from before negotiation. */
+    @Test
+    fun oldFirmwareStillCallsWithCodec2() = runTest {
+        val b = bench(activated = true, codecs = both)
+        connect(b)
+        b.sim.codecNegotiation = false
+        b.phone.dial(peer)
+        advanceTimeBy(5_000)
+        assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
+        assertEquals(CodecId.CODEC2_1200, b.state.call?.codec)
+        val console = b.session.console.entries.value.map { it.text }
+        assertTrue(console.contains("COMMAND DIAL_CAPS 0x03 $peer: bad argument (0x81)"))
+        assertTrue(console.contains("COMMAND DIAL $peer: accepted"))
+    }
+
+    @Test
+    fun anIncomingCallIsAnsweredWithTheBestSharedCodec() = runTest {
+        val b = bench(activated = true, codecs = both)
+        connect(b)
+        assertTrue(b.sim.incomingCall(peer, caps = 0x03))
+        advanceTimeBy(100)
+        assertEquals(0x03, b.state.call?.caps)
+        b.phone.answer()
+        advanceTimeBy(1_000)
+        assertEquals(CallPhase.CONNECTED, b.state.call?.phase)
+        assertEquals(CodecId.LPCNET_1733, b.state.call?.codec)
+    }
+
+    /** Review focus 4, the callee's side: never shown, and logged as a missed call with the reason. */
+    @Test
+    fun anIncomingCallWithNoSharedCodecIsLoggedAsMissedAndNeverShown() = runTest {
+        val b = bench(activated = true)
+        connect(b)
+        assertTrue(b.sim.incomingCall(peer, caps = CodecId.bit(CodecId.LPCNET_1733)))
+        advanceTimeBy(1_000) // ANSWER_CODEC 0, then the release (0.3 s)
+        assertNull(b.state.call)
+        assertEquals(SigState.REGISTERED, b.sim.sigState)
+        val e = b.session.callLog.entries.value.single()
+        assertEquals(CallKind.MISSED, e.kind)
+        assertEquals(EndCause.NO_CODEC.code, e.causeCode)
+    }
+
+    /** Review focus 2: firmware from before negotiation sends no CALL_CAPS. */
+    @Test
+    fun oldFirmwareRingsWithoutCallCapsAndAnswersWithCodec2() = runTest {
+        val b = bench(activated = true, codecs = both)
+        connect(b)
+        b.sim.codecNegotiation = false
+        assertTrue(b.sim.incomingCall(peer))
+        advanceTimeBy(100)
+        assertTrue(b.state.call!!.silent) // waiting a moment for CALL_CAPS
+        advanceTimeBy(PhoneSession.CAPS_WAIT_MS)
+        assertFalse(b.state.call!!.silent)
+        b.phone.answer()
+        advanceTimeBy(1_000)
+        assertEquals(CodecId.CODEC2_1200, b.state.call?.codec)
     }
 }
