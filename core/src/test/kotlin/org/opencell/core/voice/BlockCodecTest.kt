@@ -3,8 +3,10 @@ package org.opencell.core.voice
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.opencell.core.fakes.FakeCodec
+import org.opencell.core.fakes.FakeConcealingCodec
 import org.opencell.core.protocol.GattContract
 
 class BlockCodecTest {
@@ -61,5 +63,36 @@ class BlockCodecTest {
         assertEquals("Codec2 1200", CodecId.label(1))
         assertEquals("LPCNet 1733", CodecId.label(2))
         assertEquals("codec 9", CodecId.label(9))
+    }
+
+    /** OpenVoxNB spec V8: its frame is the whole 120 ms block, so a block is one frame. */
+    @Test
+    fun aCodecWhoseFrameIsTheWholeBlockIsOneFrame() {
+        val c = BlockCodec(FakeConcealingCodec(CodecId.OVX_800, frameBytes = 12))
+        assertEquals(1, c.frames)
+        assertEquals(960, c.blockSamples)
+        assertEquals(12, c.payloadBytes)
+        val pcm = c.decode(c.encode(ShortArray(960) { 300 }))
+        assertEquals(300, pcm[959].toInt())
+        assertEquals(3, BlockCodec(FakeCodec()).frames)
+    }
+
+    @Test
+    fun aLostBlockIsDecodedOnlyByACodecThatConceals() {
+        val codec = FakeConcealingCodec()
+        val c = BlockCodec(codec)
+        assertTrue(c.concealsLoss)
+        assertEquals(FakeConcealingCodec.LOST.toInt(), c.decode(null)[0].toInt())
+        assertEquals(1, codec.lost)
+        assertEquals(DecoderStats(concealedFrames = 6), c.decoderStats)
+        assertThrows(IllegalArgumentException::class.java) { BlockCodec(FakeCodec()).decode(null) }
+    }
+
+    @Test
+    fun aFrameThatDoesNotDivideTheBlockIsRefused() {
+        val odd = object : VoiceCodec by FakeCodec() {
+            override val frameSamples = 400
+        }
+        assertThrows(IllegalArgumentException::class.java) { BlockCodec(odd) }
     }
 }

@@ -2,6 +2,7 @@ package org.opencell.core.voice
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.opencell.core.fakes.FakeCodecs
@@ -72,5 +73,29 @@ class CodecChoiceTest {
     fun aFactoryListsTheCodecsItMakes() {
         assertEquals(listOf(codec2, lpcnet), FakeCodecs(setOf(2, 1)).codecs)
         assertEquals(emptyList<CodecInfo>(), VoiceCodecFactory.NONE.codecs)
+    }
+
+    /** OpenVoxNB spec V1/V2: ids 3-6 by bit rate, and OVX-600 below Codec2 1200 because it carries half the bits. */
+    @Test
+    fun openVoxNbRanksByBitRateAndItsLowestModeBelowCodec2() {
+        assertEquals(listOf(6, 5, 4, 2, 1, 3), CodecId.RANKING)
+        assertEquals(CodecId.OVX_1200, CodecId.best(0x21)) // Codec2 1200 + OVX-1200: the spec's example
+        assertEquals(CodecId.CODEC2_1200, CodecId.best(0x05)) // Codec2 1200 + OVX-600
+        assertEquals(CodecId.OVX_600, CodecId.best(0x04))
+        assertEquals("OpenVoxNB 600", CodecId.label(CodecId.OVX_600))
+        assertEquals("OpenVoxNB 1200", CodecId.label(CodecId.OVX_1200))
+    }
+
+    @Test
+    fun factoriesCombineInOrder() {
+        val a = FakeCodecs(setOf(CodecId.CODEC2_1200))
+        val b = FakeCodecs(setOf(CodecId.CODEC2_1200, CodecId.OVX_1200))
+        val both = VoiceCodecFactory.of(a, b)
+        assertEquals(listOf(CodecId.CODEC2_1200, CodecId.OVX_1200), both.codecs.map { it.id })
+        both.create(CodecId.CODEC2_1200)
+        assertEquals(1, a.made.size) // the first factory that makes an id makes it
+        assertEquals(0, b.made.size)
+        assertTrue(both.create(CodecId.OVX_1200)!!.concealsLoss)
+        assertNull(both.create(CodecId.LPCNET_1733))
     }
 }
