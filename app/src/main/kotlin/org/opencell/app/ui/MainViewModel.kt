@@ -25,6 +25,8 @@ import org.opencell.core.protocol.PayloadCheck
 import org.opencell.core.protocol.PayloadRules
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 import kotlin.time.Duration.Companion.milliseconds
 
 /** Phone-side prerequisites, re-checked whenever the activity resumes. */
@@ -183,6 +185,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val callAudio = app.graph.callAudio
     val tonePlan = app.graph.tonePlan
     val voiceCodec = app.graph.voiceCodec
+
+    /** What "Call with…" offers: every codec this build runs (codec-negotiation spec §7.2). */
+    val callCodecs: List<CodecInfo> get() = voiceCodec.supported
     val phone = phoneSession.state
 
     // --- developer options ---
@@ -331,6 +336,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Calls [number] straight away: a test number, or Call back in Recents. */
     fun dialNumber(number: String) {
         dialError = phoneSession.dial(number)
+    }
+
+    /** Call, with [codec] for this one call ("Call with…" on the keypad). */
+    fun dialWith(codec: CodecPreference) {
+        dialError = phoneSession.dial(dialInput, codec)
+    }
+
+    /** Calls [number] straight away with [codec] for this one call ("Call with…" in Recents). */
+    fun dialNumberWith(number: String, codec: CodecPreference) {
+        dialError = phoneSession.dial(number, codec)
     }
 
     fun deactivate() = phoneSession.deactivate()

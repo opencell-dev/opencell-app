@@ -209,7 +209,9 @@ fun PhoneScreen(vm: MainViewModel, onOpenTerminal: () -> Unit) {
                     onCall = vm::dialNumber,
                     onDelete = vm::deleteCall,
                     onSeen = vm::markMissedSeen,
+                    onCallWith = vm::dialNumberWith,
                 ),
+                callCodecs = vm.callCodecs,
                 modifier = m,
             )
         }
@@ -383,9 +385,11 @@ private fun HomePage(vm: MainViewModel, phone: PhoneState, modifier: Modifier) {
                     onPaste = vm::paste,
                     onCall = vm::dial,
                     onTestNumber = vm::dialNumber,
+                    onCallWith = vm::dialWith,
                 ),
                 modifier = Modifier.weight(1f),
                 layout = layout,
+                callCodecs = vm.callCodecs,
             )
         }
     }

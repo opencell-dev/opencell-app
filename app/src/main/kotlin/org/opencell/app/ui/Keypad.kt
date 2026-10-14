@@ -27,9 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -56,6 +54,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
@@ -76,6 +75,8 @@ import org.opencell.core.phone.DialHint
 import org.opencell.core.phone.DialPad
 import org.opencell.core.phone.ServiceNumbers
 import org.opencell.core.protocol.PhoneNumber
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 
 /** What the keypad does; the screen wires these to [MainViewModel]. */
 class KeypadActions(
@@ -86,6 +87,8 @@ class KeypadActions(
     val onPaste: (String) -> Unit,
     val onCall: () -> Unit,
     val onTestNumber: (String) -> Unit,
+    /** "Call with…": Call, with one codec choice for this call (codec-negotiation spec §7.2). */
+    val onCallWith: (CodecPreference) -> Unit = {},
 )
 
 /**
@@ -159,6 +162,8 @@ fun Keypad(
     actions: KeypadActions,
     modifier: Modifier = Modifier,
     layout: KeypadLayout? = null,
+    /** What Call's long press offers ("Call with…"); empty: no long press. */
+    callCodecs: List<CodecInfo> = emptyList(),
 ) {
     val m = keypadMetrics()
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -176,7 +181,7 @@ fun Keypad(
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     HintLine(hint, canDial, notice, m.hint)
                     NumberDisplay(input, m.number, actions)
-                    CallRow(input, hint, canDial, side = true, actions)
+                    CallRow(input, hint, canDial, side = true, actions, callCodecs)
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     KeyGrid(keyW.coerceAtLeast(MIN_KEY), keyH.coerceIn(MIN_KEY, MAX_KEY), gapX, gapY, actions)
@@ -198,7 +203,7 @@ fun Keypad(
                 HintLine(hint, canDial, notice, m.hint)
                 NumberDisplay(input, m.number, actions)
                 KeyGrid(keyW.coerceAtLeast(MIN_KEY), keyH.coerceIn(MIN_KEY, MAX_KEY), gapX, gapY, actions)
-                CallRow(input, hint, canDial, side = false, actions)
+                CallRow(input, hint, canDial, side = false, actions, callCodecs)
             }
         }
     }
@@ -424,7 +429,7 @@ private fun DialKey(key: Char, width: Dp, height: Dp, onPress: () -> Unit, onLon
 }
 
 /**
- * Call in the middle; "Test numbers" to its left and Delete (long press:
+ * Call in the middle (a long press offers "Call with…", codec-negotiation spec §7.2); "Test numbers" to its left and Delete (long press:
  * clear) to its right, so nothing else takes a row of its own. Call and
  * Delete stay at or above the 48 dp touch minimum ([callSize], [deleteSize]);
  * Call stays green when off, only faded. Delete shows when there is something
@@ -432,27 +437,50 @@ private fun DialKey(key: Char, width: Dp, height: Dp, onPress: () -> Unit, onLon
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CallRow(input: String, hint: DialHint, canDial: Boolean, side: Boolean, actions: KeypadActions) {
+private fun CallRow(input: String, hint: DialHint, canDial: Boolean, side: Boolean, actions: KeypadActions, callCodecs: List<CodecInfo>) {
     val view = LocalView.current
     val call = callSize(side)
     val delete = deleteSize(side)
+    val enabled = canDial && hint.callable
+    var callWith by remember { mutableStateOf(false) }
+    val longPress: (() -> Unit)? = if (callCodecs.isEmpty()) {
+        null
+    } else {
+        {
+            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            callWith = true
+        }
+    }
     Row(
         Modifier.fillMaxWidth().height(call + 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TestNumbers(canDial, actions.onTestNumber, Modifier.weight(1f))
-        FilledIconButton(
-            onClick = actions.onCall,
-            enabled = canDial && hint.callable,
-            modifier = Modifier.size(call),
-            colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = CallGreen,
-                contentColor = Color.White,
-                disabledContainerColor = CallGreen.copy(alpha = 0.3f),
-                disabledContentColor = Color.White.copy(alpha = 0.6f),
-            ),
-        ) {
-            Icon(Icons.Filled.Call, contentDescription = "Call", modifier = Modifier.size(call * 0.45f))
+        Box(contentAlignment = Alignment.Center) {
+            Surface(
+                shape = CircleShape,
+                color = if (enabled) CallGreen else CallGreen.copy(alpha = 0.3f),
+                contentColor = if (enabled) Color.White else Color.White.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .size(call)
+                    .clip(CircleShape)
+                    .combinedClickable(enabled = enabled, onClick = actions.onCall, onLongClick = longPress)
+                    .clearAndSetSemantics {
+                        contentDescription = "Call"
+                        role = Role.Button
+                        if (enabled) {
+                            onClick { actions.onCall(); true }
+                            if (longPress != null) onLongClick(label = CALL_WITH) { longPress(); true }
+                        } else {
+                            disabled()
+                        }
+                    },
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(call * 0.45f))
+                }
+            }
+            CallWithMenu(callWith, callCodecs, onDismiss = { callWith = false }, onPick = actions.onCallWith)
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             if (input.isNotEmpty()) {

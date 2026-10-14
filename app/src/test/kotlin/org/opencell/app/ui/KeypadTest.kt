@@ -35,6 +35,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.core.phone.DialPad
 import org.opencell.core.phone.PhoneSession
+import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 import org.robolectric.annotation.Config
 
 /** The keypad on its own (dial-and-recents spec §3): typing, deleting, +, paste, Call's enabling, test numbers, layout. */
@@ -49,7 +52,9 @@ class KeypadTest {
     private val calls = mutableListOf<String>()
     private val testNumbers = mutableListOf<String>()
 
-    private fun show(canDial: Boolean = true, home: String? = me) {
+    private val callsWith = mutableListOf<CodecPreference>()
+
+    private fun show(canDial: Boolean = true, home: String? = me, codecs: List<CodecInfo> = emptyList()) {
         compose.setContent {
             MaterialTheme {
                 Keypad(
@@ -65,7 +70,9 @@ class KeypadTest {
                         onPaste = { input = DialPad.fromPaste(it) },
                         onCall = { calls += input },
                         onTestNumber = { testNumbers += it },
+                        onCallWith = { callsWith += it },
                     ),
+                    callCodecs = codecs,
                 )
             }
         }
@@ -206,5 +213,29 @@ class KeypadTest {
         val layouts = mutableListOf<TextLayoutResult>()
         compose.onNodeWithTag(NUMBER_TAG).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertFalse(layouts.single().didOverflowWidth)
+    }
+
+    /** Codec-negotiation spec §7.2: a long press on Call chooses the codec for this one call. */
+    @Test
+    fun aLongPressOnCallOffersCallWith() {
+        show(codecs = listOf(CodecInfo(CodecId.CODEC2_1200), CodecInfo(7, experimental = true)))
+        type("6065550100")
+        val call = compose.onNodeWithContentDescription("Call").fetchSemanticsNode()
+        assertEquals("Call with…", call.config[SemanticsActions.OnLongClick].label)
+        compose.onNodeWithContentDescription("Call").performTouchInput { longClick() }
+        compose.onNodeWithText("Call with…").assertExists()
+        compose.onNodeWithText("Automatic").assertExists()
+        compose.onNodeWithText("Codec2 1200").assertExists()
+        compose.onNodeWithText("codec 7 (experimental)").performClick()
+        assertEquals(listOf<CodecPreference>(CodecPreference.Only(7)), callsWith)
+        assertEquals(emptyList<String>(), calls)
+    }
+
+    @Test
+    fun callWithoutCodecsHasNoLongPress() {
+        show()
+        type("6065550100")
+        val call = compose.onNodeWithContentDescription("Call").fetchSemanticsNode()
+        assertFalse(call.config.contains(SemanticsActions.OnLongClick))
     }
 }

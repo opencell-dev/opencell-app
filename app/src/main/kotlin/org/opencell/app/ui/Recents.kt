@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -19,7 +21,6 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,12 +32,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,6 +60,8 @@ import org.opencell.core.calllog.CallKind
 import org.opencell.core.calllog.CallLogDisplay
 import org.opencell.core.calllog.CallLogEntry
 import org.opencell.core.protocol.PhoneNumber
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 
 /** What a Recents row can do; the screen wires these to [MainViewModel]. */
 class RecentsActions(
@@ -63,11 +72,13 @@ class RecentsActions(
     val onDelete: (Long) -> Unit,
     /** Recents is on screen with the app resumed: missed calls count as seen. */
     val onSeen: () -> Unit,
+    /** The call button's long press ("Call with…"): call it now with one codec choice (codec-negotiation spec §7.2). */
+    val onCallWith: (String, CodecPreference) -> Unit = { _, _ -> },
 )
 
 /**
  * Recents (dial-and-recents spec §5): the call log grouped by day, newest
- * first. A row's call button calls back at once; tapping the row puts its
+ * first. A row's call button calls back at once (a long press offers "Call with…"); tapping the row puts its
  * number on the keypad instead (a soft confirmation, the same on both screens
  * of the Fold); a long press offers Call, Copy number and Delete. While this
  * is on screen and the app is resumed, missed calls count as seen.
@@ -79,6 +90,8 @@ fun Recents(
     canDial: Boolean,
     devUnlocked: Boolean,
     actions: RecentsActions,
+    /** What a call button's long press offers ("Call with…"); empty: no long press. */
+    callCodecs: List<CodecInfo> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     LifecycleResumeEffect(unseenMissed) {
@@ -119,7 +132,7 @@ fun Recents(
                 )
             }
             items(day.entries, key = { it.id }) { e ->
-                RecentRow(e, time.format(Instant.ofEpochMilli(e.startedAt).atZone(zone)), canDial, devUnlocked, actions)
+                RecentRow(e, time.format(Instant.ofEpochMilli(e.startedAt).atZone(zone)), canDial, devUnlocked, actions, callCodecs)
             }
         }
     }
@@ -127,7 +140,7 @@ fun Recents(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecentRow(e: CallLogEntry, time: String, canDial: Boolean, devUnlocked: Boolean, actions: RecentsActions) {
+private fun RecentRow(e: CallLogEntry, time: String, canDial: Boolean, devUnlocked: Boolean, actions: RecentsActions, callCodecs: List<CodecInfo>) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -171,9 +184,11 @@ private fun RecentRow(e: CallLogEntry, time: String, canDial: Boolean, devUnlock
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(time, style = MaterialTheme.typography.bodySmall)
                     if (number != null) {
-                        IconButton(onClick = { actions.onCall(number) }, enabled = canDial) {
-                            Icon(Icons.Filled.Call, contentDescription = "Call $title")
-                        }
+                        CallBackButton(
+                            title, canDial, callCodecs,
+                            onCall = { actions.onCall(number) },
+                            onCallWith = { actions.onCallWith(number, it) },
+                        )
                     }
                 }
             },
@@ -192,6 +207,46 @@ private fun RecentRow(e: CallLogEntry, time: String, canDial: Boolean, devUnlock
             }
             DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; actions.onDelete(e.id) })
         }
+    }
+}
+
+/** A row's call button: a tap calls back with the setting's codecs, a long press offers "Call with…" (codec-negotiation spec §7.2). */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CallBackButton(
+    title: String,
+    canDial: Boolean,
+    codecs: List<CodecInfo>,
+    onCall: () -> Unit,
+    onCallWith: (CodecPreference) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    val long: (() -> Unit)? = if (codecs.isEmpty()) null else { { menu = true } }
+    Box {
+        Box(
+            Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .combinedClickable(enabled = canDial, onClick = onCall, onLongClick = long)
+                .clearAndSetSemantics {
+                    contentDescription = "Call $title"
+                    role = Role.Button
+                    if (canDial) {
+                        onClick { onCall(); true }
+                        if (long != null) onLongClick(label = CALL_WITH) { long(); true }
+                    } else {
+                        disabled()
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Call,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (canDial) 1f else 0.38f),
+            )
+        }
+        CallWithMenu(menu, codecs, onDismiss = { menu = false }, onPick = onCallWith)
     }
 }
 

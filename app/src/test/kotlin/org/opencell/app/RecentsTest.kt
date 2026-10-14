@@ -33,6 +33,7 @@ import org.opencell.core.phone.FinishedCall
 import org.opencell.core.phone.PhoneSession
 import org.opencell.core.protocol.EndCause
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.CodecPreference
 import org.opencell.core.voice.VoiceCounters
 import org.robolectric.annotation.Config
 
@@ -242,5 +243,22 @@ class RecentsTest {
         }
         compose.waitForText("Echo test (core 1)")
         compose.waitUntil(5_000) { graph.callLog.unseenMissed.value == 0 }
+    }
+
+    /** §7.2: the call button's long press calls back with one codec, for that call only. */
+    @Test
+    fun theCallButtonsLongPressCallsWithACodec() {
+        // Counters, so the row's developer line is "Codec2 1200 · sent 0 · …" and only the menu says just "Codec2 1200".
+        seed(Direction.INCOMING, echo, connected = true, voice = VoiceCounters())
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        openRecents()
+        compose.onNodeWithContentDescription("Call Echo test (core 1)").performTouchInput { longClick() }
+        compose.onNodeWithText("Call with…").assertExists()
+        compose.onNodeWithText("Codec2 1200").performClick()
+        compose.waitForText("Outgoing call")
+        assertTrue(graph.session.console.entries.value.any { it.text == "COMMAND DIAL_CAPS 0x01 $echo: accepted" })
+        assertEquals(CodecPreference.Automatic, graph.voiceCodec.choice.value) // the setting is untouched
+        compose.onNodeWithText("Hang up").performClick()
     }
 }
