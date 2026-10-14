@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.opencell.core.voice.BlockCodec
 import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -35,8 +36,9 @@ class Codec2Test {
 
     @Test
     fun onlyCodecId1IsMade() {
-        assertNull(Codec2.create(CodecId.CODEC2_700C_SEQ))
+        assertNull(Codec2.create(CodecId.LPCNET_1733))
         assertNull(Codec2.create(0))
+        assertEquals(listOf(CodecInfo(CodecId.CODEC2_1200)), Codec2.codecs)
     }
 
     @Test

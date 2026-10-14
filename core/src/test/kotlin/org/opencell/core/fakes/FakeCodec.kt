@@ -1,6 +1,7 @@
 package org.opencell.core.fakes
 
 import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
 import org.opencell.core.voice.VoiceCodec
 import org.opencell.core.voice.VoiceCodecFactory
 
@@ -38,9 +39,12 @@ class FakeCodec(override val codecId: Int = CodecId.CODEC2_1200) : VoiceCodec {
 }
 
 /** Makes [FakeCodec]s for [supported] ids and remembers every instance. */
-class FakeCodecs(private val supported: Set<Int> = setOf(CodecId.CODEC2_1200)) : VoiceCodecFactory {
+class FakeCodecs(supported: Set<Int> = setOf(CodecId.CODEC2_1200)) : VoiceCodecFactory {
+    private val ids = supported
     val made = mutableListOf<FakeCodec>()
 
+    override val codecs: List<CodecInfo> get() = ids.sorted().map { CodecInfo(it) }
+
     override fun create(codecId: Int): VoiceCodec? =
-        if (codecId in supported) FakeCodec(codecId).also { made += it } else null
+        if (codecId in ids) FakeCodec(codecId).also { made += it } else null
 }

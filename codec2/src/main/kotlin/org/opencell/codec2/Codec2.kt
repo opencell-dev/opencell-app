@@ -1,6 +1,7 @@
 package org.opencell.codec2
 
 import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
 import org.opencell.core.voice.VoiceCodec
 import org.opencell.core.voice.VoiceCodecFactory
 
@@ -42,6 +43,8 @@ class Codec2 private constructor(override val codecId: Int, mode: Int) : VoiceCo
     companion object Factory : VoiceCodecFactory {
         /** `CODEC2_MODE_1200` in codec2.h. */
         const val MODE_1200 = 5
+
+        override val codecs: List<CodecInfo> = listOf(CodecInfo(CodecId.CODEC2_1200))
 
         override fun create(codecId: Int): VoiceCodec? = when (codecId) {
             CodecId.CODEC2_1200 -> Codec2(codecId, MODE_1200)

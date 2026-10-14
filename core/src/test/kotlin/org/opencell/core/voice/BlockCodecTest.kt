@@ -59,6 +59,7 @@ class BlockCodecTest {
         assertEquals(1, CodecId.CODEC2_1200)
         assertEquals(CodecId.CODEC2_1200, CodecId.DEFAULT)
         assertEquals("Codec2 1200", CodecId.label(1))
+        assertEquals("LPCNet 1733", CodecId.label(2))
         assertEquals("codec 9", CodecId.label(9))
     }
 }
