@@ -1,5 +1,7 @@
 package org.opencell.core.phone
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -16,6 +18,7 @@ import org.opencell.core.link.UplinkSender
 import org.opencell.core.link.WriteResult
 import org.opencell.core.protocol.ActivationQr
 import org.opencell.core.protocol.Command
+import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.Hex
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.protocol.RegMode
@@ -23,6 +26,9 @@ import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.protocol.TerminalStatus
 import org.opencell.core.session.ConsoleKind
+import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 import kotlin.time.Duration.Companion.milliseconds
 
 class PhoneSessionTest {
@@ -34,13 +40,22 @@ class PhoneSessionTest {
 
     private class Harness(val link: FakeLink, val phone: PhoneSession, val memory: PhoneMemory, val log: MutableList<String>)
 
-    private fun TestScope.harness(sig: SigState = SigState.REGISTERED, memory: PhoneMemory = PhoneMemory.inMemory()): Harness {
+    /** Codec2 1200 and LPCNet 1733: two codecs, so the ranking has something to choose. */
+    private val both = listOf(CodecInfo(CodecId.CODEC2_1200), CodecInfo(CodecId.LPCNET_1733))
+
+    private fun TestScope.harness(
+        sig: SigState = SigState.REGISTERED,
+        memory: PhoneMemory = PhoneMemory.inMemory(),
+        codecs: List<CodecInfo> = listOf(CodecInfo(CodecId.CODEC2_1200)),
+        preference: () -> CodecPreference = { CodecPreference.Automatic },
+    ): Harness {
         val link = FakeLink(backgroundScope, testScheduler.timeSource)
         link.statusFlow.value = status(sig)
         val log = mutableListOf<String>()
         val phone = PhoneSession(
             link, UplinkSender(link), backgroundScope, memory, { k, t -> log += "$k $t" },
             clock = { testScheduler.currentTime }, monotonic = { testScheduler.currentTime },
+            codecs = codecs, codecPreference = preference,
         )
         runCurrent()
         return Harness(link, phone, memory, log)
@@ -67,9 +82,9 @@ class PhoneSessionTest {
         assertTrue(h.link.commands.isEmpty())
         assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
-        assertEquals("02 2b 38 38 33 31 36 30 36 35 35 35 30 30 31 30 30", hex(h.link.commands.single()))
+        assertEquals("08 01 2b 38 38 33 31 36 30 36 35 35 35 30 30 31 30 30", hex(h.link.commands.single()))
         assertEquals(Call(null, Direction.OUTGOING, peer, CallPhase.CALLING), h.phone.state.value.call)
-        assertTrue(h.log.contains("INFO COMMAND DIAL $peer: accepted"))
+        assertTrue(h.log.contains("INFO COMMAND DIAL_CAPS 0x01 $peer: accepted"))
     }
 
     /** Numbering v2 §5.3: short forms are completed from the terminal's own number; DIAL carries the full form. */
@@ -80,7 +95,7 @@ class PhoneSessionTest {
         assertNull(h.phone.dial("606-555-0100"))
         runCurrent()
         assertEquals("DIAL $peer", Command.Dial(peer).label)
-        assertEquals(hex(Command.Dial(peer).encode()), hex(h.link.commands.single()))
+        assertEquals(hex(Command.DialCaps(0x01, peer).encode()), hex(h.link.commands.single()))
         assertEquals(peer, h.phone.state.value.call?.peer)
     }
 
@@ -91,16 +106,18 @@ class PhoneSessionTest {
         assertNull(h.phone.state.value.number)
         assertNull(h.phone.dial("606 555 1235"))
         runCurrent()
-        assertEquals(hex(Command.Dial("6065551235").encode()), hex(h.link.commands.single()))
+        assertEquals(hex(Command.DialCaps(0x01, "6065551235").encode()), hex(h.link.commands.single()))
     }
 
     /** I2: ATT 0x81 on DIAL also happens when a v2-firmware terminal refuses v3's longer number argument. */
     @Test
     fun dialRefusedWithBadArgumentMentionsOldFirmware() = runTest {
         val h = harness()
-        h.link.commandResults += WriteResult.BadArgument
+        h.link.commandResults += WriteResult.BadArgument // DIAL_CAPS: an unknown command to firmware from before negotiation
+        h.link.commandResults += WriteResult.BadArgument // the DIAL that follows: and a v2 terminal refuses v3's longer number
         assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
+        assertEquals(listOf("08 01", "02 2b"), h.link.commands.map { hex(it).take(5) })
         assertEquals(
             "The terminal refused this number (or the terminal's firmware is older than numbering v2: update it)",
             h.phone.state.value.notice,
@@ -570,5 +587,153 @@ class PhoneSessionTest {
 
     private companion object {
         const val GOLDEN = "opencell:2:AgEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyCgoaKjpKWmp7CxsrO0tba3uLm6u7y9vr-IMWBlVQEjT3hWNBIAAD44"
+    }
+
+    /** Codec-negotiation spec §7.2: DIAL_CAPS carries the allowed codecs, read from the setting at each dial. */
+    @Test
+    fun dialOffersTheAllowedCodecs() = runTest {
+        var pref: CodecPreference = CodecPreference.Automatic
+        val h = harness(codecs = both, preference = { pref })
+        assertNull(h.phone.dial(peer))
+        runCurrent()
+        assertEquals(hex(Command.DialCaps(0x03, peer).encode()), hex(h.link.commands.last()))
+        pref = CodecPreference.Only(CodecId.CODEC2_1200)
+        assertNull(h.phone.dial(peer))
+        runCurrent()
+        assertEquals(hex(Command.DialCaps(0x01, peer).encode()), hex(h.link.commands.last()))
+    }
+
+    /** "Call with…" narrows one call; the next uses the setting again. */
+    @Test
+    fun callWithNarrowsOneCallOnly() = runTest {
+        val h = harness(codecs = both)
+        assertNull(h.phone.dial(peer, CodecPreference.Only(CodecId.LPCNET_1733)))
+        runCurrent()
+        assertNull(h.phone.dial(peer))
+        runCurrent()
+        assertEquals(
+            listOf(Command.DialCaps(0x02, peer), Command.DialCaps(0x03, peer)).map { hex(it.encode()) },
+            h.link.commands.map(::hex),
+        )
+    }
+
+    /** Review focus 1: firmware from before negotiation refuses DIAL_CAPS as an unknown command (0x81). */
+    @Test
+    fun oldFirmwareGetsPlainDialUntilTheLinkReconnects() = runTest {
+        val h = harness()
+        h.link.commandResults += WriteResult.BadArgument
+        assertNull(h.phone.dial(peer))
+        runCurrent()
+        assertEquals(listOf("08 01", "02 2b"), h.link.commands.map { hex(it).take(5) })
+        assertEquals(CallPhase.CALLING, h.phone.state.value.call?.phase)
+        assertNull(h.phone.state.value.notice)
+        assertNull(h.phone.dial(peer)) // remembered: straight to DIAL
+        runCurrent()
+        assertEquals("02 2b", hex(h.link.commands.last()).take(5))
+        h.link.stateFlow.value = LinkState.WaitingToReconnect(LinkTarget(address, null), 1, 1000.milliseconds, "supervision timeout")
+        runCurrent()
+        h.link.stateFlow.value = LinkState.Connected(LinkTarget(address, null), 247)
+        runCurrent()
+        assertNull(h.phone.dial(peer)) // a new link may be to new firmware: DIAL_CAPS again
+        runCurrent()
+        assertEquals("08 01", hex(h.link.commands.last()).take(5))
+    }
+
+    @Test
+    fun oldFirmwareAndNoCodec2MeansTheCallDoesNotStart() = runTest {
+        val h = harness(codecs = both, preference = { CodecPreference.Only(CodecId.LPCNET_1733) })
+        h.link.commandResults += WriteResult.BadArgument
+        assertNull(h.phone.dial(peer))
+        runCurrent()
+        assertEquals(1, h.link.commands.size) // no DIAL: all it can carry is Codec2 1200
+        assertEquals(PhoneSession.NO_CODEC_CHOICE, h.phone.state.value.notice)
+        assertNull(h.phone.state.value.call)
+        assertEquals(PhoneSession.NO_CODEC_CHOICE, h.phone.dial(peer)) // remembered: said at once
+        runCurrent()
+        assertEquals(1, h.link.commands.size)
+    }
+
+    /** §7.3: ANSWER_CODEC with the best codec in CALL_CAPS that this phone allows. */
+    @Test
+    fun answerPicksTheBestCodecBothSidesAllow() = runTest {
+        val h = harness(codecs = both)
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        h.link.emitEvent(TerminalEvent.CallCaps(7, 0x03))
+        runCurrent()
+        assertFalse(h.phone.state.value.call!!.silent)
+        h.phone.answer()
+        runCurrent()
+        assertEquals("09 02", hex(h.link.commands.single()))
+        assertTrue(h.phone.state.value.call!!.answering)
+    }
+
+    /** Review focus 2: no CALL_CAPS (firmware from before negotiation): it rings after the wait, and ANSWER is plain. */
+    @Test
+    fun withoutCallCapsTheCallRingsAfterAShortWaitAndPlainAnswerGoesOut() = runTest {
+        val h = harness()
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        runCurrent()
+        assertTrue(h.phone.state.value.call!!.silent)
+        advanceTimeBy(PhoneSession.CAPS_WAIT_MS + 1)
+        assertFalse(h.phone.state.value.call!!.silent)
+        h.phone.answer()
+        runCurrent()
+        assertEquals("03", hex(h.link.commands.single()))
+    }
+
+    /** Review focus 4: nothing in common, so the phone never rings: ANSWER_CODEC 0, and the ended call is logged as missed. */
+    @Test
+    fun noSharedCodecTurnsTheCallDownWithoutRinging() = runTest {
+        val h = harness()
+        val finished = async { h.phone.finishedCalls.first() }
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        h.link.emitEvent(TerminalEvent.CallCaps(7, CodecId.bit(CodecId.LPCNET_1733)))
+        runCurrent()
+        assertEquals("09 00", hex(h.link.commands.single()))
+        val call = h.phone.state.value.call!!
+        assertTrue(call.declined)
+        assertTrue(call.silent)
+        h.link.emitEvent(TerminalEvent.Ended(7, EndCause.NO_CODEC.code))
+        runCurrent()
+        assertNull(h.phone.state.value.call) // never shown, so nothing to close
+        val f = finished.await()
+        assertEquals(Direction.INCOMING, f.direction)
+        assertEquals(EndCause.NO_CODEC.code, f.causeCode)
+        assertNull(f.connectedAt)
+        assertFalse(f.rejected)
+        assertTrue(h.log.contains("INFO No shared voice codec: turning the call down"))
+    }
+
+    /** Ruling R8: the setting at the moment of Answer counts; narrowed to nothing in common, the call is turned down. */
+    @Test
+    fun aSettingNarrowedWhileRingingIsUsedAtAnswer() = runTest {
+        var pref: CodecPreference = CodecPreference.Automatic
+        val h = harness(codecs = both, preference = { pref })
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        h.link.emitEvent(TerminalEvent.CallCaps(7, 0x01))
+        runCurrent()
+        pref = CodecPreference.Only(CodecId.LPCNET_1733)
+        h.phone.answer()
+        runCurrent()
+        assertEquals("09 00", hex(h.link.commands.single()))
+        assertTrue(h.phone.state.value.call!!.declined)
+    }
+
+    /** Review focus 3: a reconnect while ringing loses CALL_CAPS (the terminal doesn't repeat events), so ANSWER is plain. */
+    @Test
+    fun afterAResyncWhileRingingAnswerIsPlain() = runTest {
+        val h = harness(codecs = both)
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        h.link.emitEvent(TerminalEvent.CallCaps(7, 0x03))
+        runCurrent()
+        h.link.statusFlow.value = status(SigState.RINGING_IN)
+        h.link.stateFlow.value = LinkState.WaitingToReconnect(LinkTarget(address, null), 1, 1000.milliseconds, "supervision timeout")
+        runCurrent()
+        h.link.stateFlow.value = LinkState.Connected(LinkTarget(address, null), 247)
+        runCurrent()
+        assertNull(h.phone.state.value.call?.caps)
+        h.phone.answer()
+        runCurrent()
+        assertEquals("03", hex(h.link.commands.single()))
     }
 }

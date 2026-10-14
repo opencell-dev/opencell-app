@@ -24,7 +24,12 @@ import org.opencell.core.protocol.DialCheck
 import org.opencell.core.protocol.Hex
 import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.SigState
+import org.opencell.core.protocol.TerminalEvent
 import org.opencell.core.session.ConsoleKind
+import org.opencell.core.voice.CodecChoice
+import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -88,6 +93,13 @@ data class CallData(
  * stored one may be a stale notification sent just before an accepted command
  * — and only if the read fails reconciles against the stored one ([PhoneInput.Tick]).
  *
+ * Codec negotiation (codec-negotiation spec §7): a call goes out as DIAL_CAPS with
+ * the codecs this phone allows ([allowedCaps]: one call's "Call with…" choice or the
+ * setting, within [codecs]), falling back to plain DIAL for firmware from before
+ * negotiation. An INCOMING stays silent until its CALL_CAPS (or [CAPS_WAIT_MS]);
+ * with no codec in common the phone turns it down (ANSWER_CODEC 0) without ringing,
+ * and otherwise Answer sends ANSWER_CODEC with the best shared codec.
+ *
  * [monotonic] times the grace; [clock] (wall time) only what's displayed.
  */
 class PhoneSession(
@@ -98,6 +110,10 @@ class PhoneSession(
     private val log: (ConsoleKind, String) -> Unit = { _, _ -> },
     private val clock: () -> Long = System::currentTimeMillis,
     private val monotonic: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** The codecs this build runs (codec-negotiation spec §7.1); never empty. */
+    private val codecs: List<CodecInfo> = listOf(CodecInfo(CodecId.CODEC2_1200)),
+    /** The user's setting (§7.1), read at every dial and answer. */
+    private val codecPreference: () -> CodecPreference = { CodecPreference.Automatic },
 ) {
     private val lock = Any()
     private val commandLock = Mutex()
@@ -130,7 +146,18 @@ class PhoneSession(
     /** The BLE address this session last resynced against, so a different one triggers a reset. */
     private var lastAddress: String? = null
 
+    /**
+     * The terminal refused DIAL_CAPS as an unknown command (firmware from before codec
+     * negotiation): DIAL goes out directly until the link reconnects (§7.2).
+     */
+    @Volatile
+    private var noDialCaps = false
+
+    /** The pending [PhoneInput.CapsWaitOver] for the ringing call, if any. */
+    private var capsWait: Job? = null
+
     init {
+        require(codecs.isNotEmpty()) { "a phone needs at least one codec" }
         scope.launch {
             // One collector for both, so an EVENT and the STATUS around it are applied in arrival order.
             link.inputs.collect { input ->
@@ -138,6 +165,7 @@ class PhoneSession(
                     is LinkInput.Event -> {
                         log(ConsoleKind.INFO, "EVENT ${input.event.label}")
                         apply(PhoneInput.Event(input.event))
+                        afterEvent(input.event)
                     }
                     is LinkInput.Status -> input.status.sig?.let { apply(PhoneInput.Status(it)) }
                 }
@@ -172,22 +200,67 @@ class PhoneSession(
     fun activate(qr: ActivationQr): Job = command(Command.Activate(qr.text)) { apply(PhoneInput.Activating(qr.number)) }
 
     /**
-     * Sends DIAL: the full form of [input], completed from this terminal's own
-     * number (numbering v2). Returns why [input] isn't a number, or null once
-     * the command is on its way.
+     * Places a call to the full form of [input], completed from this terminal's own
+     * number (numbering v2), as DIAL_CAPS with the codecs this phone allows: [codec]
+     * for this one call ("Call with…"), else the setting (codec-negotiation spec §7.2).
+     * Firmware from before negotiation refuses DIAL_CAPS as an unknown command (0x81).
+     * Plain DIAL then goes out if Codec2 1200 is allowed (all DIAL can mean), and DIAL
+     * goes out directly until the link reconnects. Returns why the call can't go out
+     * ([input] isn't a number, or such firmware and no Codec2 1200), or null once the
+     * command is on its way.
      */
-    fun dial(input: String): String? {
+    fun dial(input: String, codec: CodecPreference? = null): String? {
         val sent = when (val c = PhoneNumber.check(input, _state.value.number)) {
             is DialCheck.Number -> c.full
             is DialCheck.National -> c.digits // own number not known yet: the terminal completes it
             DialCheck.Emergency -> return EMERGENCY
             DialCheck.Empty, DialCheck.NotANumber -> return BAD_NUMBER
         }
-        command(Command.Dial(sent)) { apply(PhoneInput.Dialled(sent)) }
+        val caps = allowedCaps(codec)
+        val plainDial = CodecId.inCaps(caps, CodecId.CODEC2_1200)
+        if (noDialCaps) {
+            if (!plainDial) return NO_CODEC_CHOICE
+            command(Command.Dial(sent)) { apply(PhoneInput.Dialled(sent)) }
+            return null
+        }
+        val dialCaps = Command.DialCaps(caps, sent)
+        launchCommand(dialCaps) { r ->
+            when (r) {
+                WriteResult.Accepted -> apply(PhoneInput.Dialled(sent))
+                WriteResult.BadArgument -> { // an unknown command: firmware from before negotiation
+                    noDialCaps = true
+                    if (plainDial) {
+                        val dial = Command.Dial(sent)
+                        val again = write(dial)
+                        if (again == WriteResult.Accepted) apply(PhoneInput.Dialled(sent)) else refused(dial, again)
+                    } else {
+                        apply(PhoneInput.Notice(NO_CODEC_CHOICE))
+                    }
+                }
+                else -> refused(dialCaps, r)
+            }
+        }
         return null
     }
 
-    fun answer(): Job = command(Command.Answer) { apply(PhoneInput.Answering) }
+    /** The `codec_caps` this phone offers or accepts: [override] (one call's "Call with…") or the setting, within [codecs]. */
+    fun allowedCaps(override: CodecPreference? = null): Int = CodecChoice.allowedCaps(override ?: codecPreference(), codecs)
+
+    /**
+     * Answers the ringing call (§7.3): ANSWER_CODEC with the best codec in its CALL_CAPS
+     * that this phone allows now, or plain ANSWER (Codec2 1200) when no CALL_CAPS came
+     * (firmware from before negotiation, or a call the app knows only from STATUS).
+     * Nothing in common: ANSWER_CODEC 0, and the terminal ends the call with cause 7.
+     */
+    fun answer(): Job {
+        val caps = _state.value.activeCall?.takeIf { it.phase == CallPhase.INCOMING }?.caps
+            ?: return command(Command.Answer) { apply(PhoneInput.Answering) }
+        val codec = CodecChoice.answer(caps, allowedCaps())
+        return command(Command.AnswerCodec(codec)) {
+            apply(if (codec == CodecId.NONE) PhoneInput.Declining else PhoneInput.Answering)
+        }
+    }
+
     fun reject(): Job = command(Command.Reject) { apply(PhoneInput.Releasing) }
     fun hangup(): Job = command(Command.Hangup) { apply(PhoneInput.Releasing) }
 
@@ -245,28 +318,69 @@ class PhoneSession(
             dataJob = null
             pendingTick?.cancel()
             pendingTick = null
+            capsWait?.cancel()
+            capsWait = null
         }
     }
 
-    private fun command(cmd: Command, onAccepted: () -> Unit): Job {
+    private fun command(cmd: Command, onAccepted: () -> Unit): Job =
+        launchCommand(cmd) { r -> if (r == WriteResult.Accepted) onAccepted() else refused(cmd, r) }
+
+    /** Writes [cmd], one command at a time, then [then] with the result (under [commandLock]); a duplicate in flight is ignored. */
+    private fun launchCommand(cmd: Command, then: suspend (WriteResult) -> Unit): Job {
         val started = synchronized(lock) { inFlight.add(cmd) }
         if (!started) return Job().apply { complete() }
         return scope.launch {
             try {
-                commandLock.withLock {
-                    val r = link.writeCommand(cmd.encode())
-                    log(if (r == WriteResult.Accepted) ConsoleKind.INFO else ConsoleKind.ERROR, "COMMAND ${cmd.label}: ${r.label}")
-                    if (r == WriteResult.Accepted) {
-                        onAccepted()
-                    } else {
-                        apply(PhoneInput.Notice(refusal(cmd, r)))
-                        if (r == WriteResult.NotNow) rereadStatus()
-                    }
-                }
+                commandLock.withLock { then(write(cmd)) }
             } finally {
                 synchronized(lock) { inFlight.remove(cmd) }
             }
         }
+    }
+
+    /** One COMMAND write, logged. The caller holds [commandLock]. */
+    private suspend fun write(cmd: Command): WriteResult {
+        val r = link.writeCommand(cmd.encode())
+        log(if (r == WriteResult.Accepted) ConsoleKind.INFO else ConsoleKind.ERROR, "COMMAND ${cmd.label}: ${r.label}")
+        return r
+    }
+
+    /** A refused command: why, for the user, and after a 0x80 a fresh STATUS. */
+    private suspend fun refused(cmd: Command, r: WriteResult) {
+        apply(PhoneInput.Notice(refusal(cmd, r)))
+        if (r == WriteResult.NotNow) rereadStatus()
+    }
+
+    /** What the phone does by itself after an EVENT (§7.3): wait for an INCOMING's CALL_CAPS, or turn the call down. */
+    private fun afterEvent(e: TerminalEvent) {
+        when (e) {
+            is TerminalEvent.Incoming -> waitForCaps(e.callId)
+            is TerminalEvent.CallCaps -> {
+                val c = _state.value.activeCall ?: return
+                if (c.phase != CallPhase.INCOMING || c.id != e.callId || c.answering || c.declined) return
+                if (CodecChoice.answer(e.caps, allowedCaps()) == CodecId.NONE) decline()
+            }
+            else -> Unit
+        }
+    }
+
+    /** Lets INCOMING [callId] ring after [CAPS_WAIT_MS] if no CALL_CAPS has come (firmware from before negotiation). */
+    private fun waitForCaps(callId: Long) {
+        synchronized(lock) {
+            capsWait?.cancel()
+            capsWait = scope.launch {
+                delay(CAPS_WAIT_MS)
+                apply(PhoneInput.CapsWaitOver(callId))
+            }
+        }
+    }
+
+    /** No codec both ends allow: the call never rings; ANSWER_CODEC 0, and the terminal ends it with cause 7 (logged as missed). */
+    private fun decline() {
+        log(ConsoleKind.INFO, "No shared voice codec: turning the call down")
+        apply(PhoneInput.Declining)
+        launchCommand(Command.AnswerCodec(CodecId.NONE)) { r -> if (r == WriteResult.NotNow) rereadStatus() }
     }
 
     /**
@@ -304,6 +418,7 @@ class PhoneSession(
             }
         }
         lastAddress = address
+        noDialCaps = false // the link is new: it may be to new firmware
         resync()
     }
 
@@ -326,25 +441,32 @@ class PhoneSession(
     private fun address(): String? = link.state.value.target?.address
 
     private fun apply(input: PhoneInput) {
-        synchronized(lock) {
-            val before = _state.value
-            val wall = clock()
-            val after = PhoneReducer.reduce(before, input, monotonic(), wall)
-            _state.value = after
-            tracker.step(before, input, after, wall)?.let { _finishedCalls.trySend(it) }
-            if (before.call?.phase != CallPhase.CONNECTED && after.call?.phase == CallPhase.CONNECTED) _callData.value = CallData()
-            if (dataJob != null && (after.call?.phase != CallPhase.CONNECTED || !after.linkUp)) {
-                dataJob?.cancel()
-                dataJob = null
-            }
-            scheduleReconcile(after)
-            val address = address() ?: return
+        val after = applyOnce(input)
+        // A call turned down for want of a codec was never shown: once it has ended (and so been logged), it goes.
+        if (after.call?.let { it.phase == CallPhase.ENDED && it.declined } == true) applyOnce(PhoneInput.DismissCall)
+    }
+
+    private fun applyOnce(input: PhoneInput): PhoneState = synchronized(lock) {
+        val before = _state.value
+        val wall = clock()
+        val after = PhoneReducer.reduce(before, input, monotonic(), wall)
+        _state.value = after
+        tracker.step(before, input, after, wall)?.let { _finishedCalls.trySend(it) }
+        if (before.call?.phase != CallPhase.CONNECTED && after.call?.phase == CallPhase.CONNECTED) _callData.value = CallData()
+        if (dataJob != null && (after.call?.phase != CallPhase.CONNECTED || !after.linkUp)) {
+            dataJob?.cancel()
+            dataJob = null
+        }
+        scheduleReconcile(after)
+        val address = address()
+        if (address != null) {
             if (after.sig == SigState.NOT_ACTIVATED) {
                 if (before.sig != SigState.NOT_ACTIVATED) memory.clear(address)
             } else if (after.number != null && (after.number != before.number || after.mode != before.mode)) {
                 memory.save(address, Remembered(after.number, after.mode))
             }
         }
+        after
     }
 
     /**
@@ -396,6 +518,12 @@ class PhoneSession(
     companion object {
         const val BAD_NUMBER = "Not an OpenCell number. Dial 606-555-01234, or +883-1-606-555-01234 from another country."
         const val EMERGENCY = "OpenCell cannot make emergency calls. Use a regular phone."
+
+        /** §7.2: firmware from before negotiation can only call with Codec2 1200, and the call may not use it. */
+        const val NO_CODEC_CHOICE = "This terminal's firmware can't choose a codec"
+
+        /** How long an INCOMING stays silent waiting for its CALL_CAPS (ruling R3); firmware from before negotiation sends none. */
+        const val CAPS_WAIT_MS = 300L
 
         /**
          * How a call's peer should read. An outgoing call dialled as a national form while this

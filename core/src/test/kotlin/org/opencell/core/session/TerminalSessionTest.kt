@@ -1,5 +1,6 @@
 package org.opencell.core.session
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -8,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.opencell.core.fakes.FakeCodecs
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.loopback.LoopbackConfig
 import org.opencell.core.protocol.RegMode
@@ -15,6 +17,7 @@ import org.opencell.core.protocol.ScanSource
 import org.opencell.core.protocol.TerminalState
 import org.opencell.core.protocol.UserChannel
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.CodecPreference
 
 /** End to end on virtual time: session -> link manager -> simulated terminal and echoing cell. */
 class TerminalSessionTest {
@@ -143,5 +146,17 @@ class TerminalSessionTest {
         assertEquals(ConsoleKind.ERROR, last.kind)
         assertEquals("UP 21 B: too long (0x0D) after 1 attempt", last.text)
         session.disconnect()
+    }
+
+    /** Ruling R7: a session without codecs (tests, the loopback tools) offers Codec2 1200, as every network assumed before negotiation. */
+    @Test
+    fun theAllowedCapsComeFromTheCodecsAndTheSetting() = runTest {
+        val bare = TerminalSession(SimulatedTerminal(backgroundScope), backgroundScope, testScheduler.timeSource, { testScheduler.currentTime })
+        assertEquals(0x01, bare.phone.allowedCaps())
+        val two = TerminalSession(
+            SimulatedTerminal(backgroundScope), backgroundScope, testScheduler.timeSource, { testScheduler.currentTime },
+            codecs = FakeCodecs(setOf(1, 2)), codecPreference = MutableStateFlow(CodecPreference.Only(2)),
+        )
+        assertEquals(0x02, two.phone.allowedCaps())
     }
 }

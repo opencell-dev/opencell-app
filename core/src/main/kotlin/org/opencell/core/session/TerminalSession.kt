@@ -29,6 +29,9 @@ import org.opencell.core.protocol.SigState
 import org.opencell.core.protocol.TerminalState
 import org.opencell.core.voice.AudioIo
 import org.opencell.core.voice.CallTonePlayer
+import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.CodecInfo
+import org.opencell.core.voice.CodecPreference
 import org.opencell.core.voice.TonePlan
 import org.opencell.core.voice.TonePlans
 import org.opencell.core.voice.VoiceCodecFactory
@@ -42,8 +45,8 @@ import kotlin.time.TimeSource
  * registration, calls), voice in connected calls, the console log and the
  * loopback test. The Android layer only supplies a [Connector], a long-lived
  * [scope], a [PhoneMemory] and, for voice, the codecs, the audio devices,
- * whether the microphone may be used now ([micAllowed]) and the call progress
- * tones' plan ([tonePlan]). Every call the phone sees goes into [callLog] when
+ * whether the microphone may be used now ([micAllowed]), the call progress
+ * tones' plan ([tonePlan]) and the voice codec setting. Every call the phone sees goes into [callLog] when
  * it ends, with its voice counters (dial-and-recents spec §4.1).
  */
 class TerminalSession(
@@ -59,6 +62,8 @@ class TerminalSession(
     micAllowed: StateFlow<Boolean> = MutableStateFlow(true),
     tonePlan: StateFlow<TonePlan> = MutableStateFlow(TonePlans.NORTH_AMERICA),
     val callLog: CallLog = CallLog(),
+    /** The voice codec setting (codec-negotiation spec §7.1): what calls offer and accept. */
+    codecPreference: StateFlow<CodecPreference> = MutableStateFlow(CodecPreference.Automatic),
 ) {
     val link = LinkManager(connector, scope, reconnect, timeSource, wallClock)
     val sender = UplinkSender(link, retryPolicy)
@@ -67,6 +72,10 @@ class TerminalSession(
     val phone = PhoneSession(
         link, sender, scope, phoneMemory, { kind, text -> console.add(kind, text) }, wallClock,
         monotonic = { started.elapsedNow().inWholeMilliseconds },
+        // A build with no codecs (tests, the loopback tools) offers what every network assumed
+        // before negotiation, Codec2 1200: its calls still connect, without audio, as they did (R7).
+        codecs = codecs.codecs.ifEmpty { listOf(CodecInfo(CodecId.CODEC2_1200)) },
+        codecPreference = { codecPreference.value },
     )
     val voice = VoiceSession(link, phone.state, codecs, audio, scope, micAllowed, timeSource)
     val tones = CallTonePlayer(phone.state, tonePlan, audio, scope)
