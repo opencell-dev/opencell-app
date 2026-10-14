@@ -23,9 +23,7 @@ import org.opencell.app.R
 import org.opencell.app.graph
 import org.opencell.app.ui.MainActivity
 import org.opencell.core.link.LinkState
-import org.opencell.core.phone.PhoneSession
 import org.opencell.core.phone.PhoneState
-import org.opencell.core.protocol.PhoneNumber
 import org.opencell.core.protocol.TerminalStatus
 
 /**
@@ -184,16 +182,7 @@ class LinkService : LifecycleService() {
             is LinkState.Connecting -> "Connecting…"
             is LinkState.Pairing -> "Pairing: enter the code shown on the terminal"
             is LinkState.PairingFailed -> "Pairing failed: open the app to retry"
-            is LinkState.Connected -> {
-                val call = phone?.activeCall?.takeUnless { it.silent }
-                val sig = phone?.sig
-                when {
-                    call != null -> call.phase.label + (call.peer?.let { " · " + PhoneSession.peerLabel(it, phone.number) } ?: "")
-                    sig != null -> sig.label + (phone.number?.let { " · " + PhoneNumber.display(it) } ?: "") +
-                        (status?.let { " · ${it.signalLabel}" } ?: "")
-                    else -> status?.let { "${it.stateLabel} · ${it.bandLabel} · ${it.signalLabel}" } ?: "Connected"
-                }
-            }
+            is LinkState.Connected -> connectedText(phone, status)
             is LinkState.WaitingToReconnect -> "Link lost, retrying in ${state.delay.inWholeSeconds.coerceAtLeast(1)} s"
         }
         val open = PendingIntent.getActivity(
