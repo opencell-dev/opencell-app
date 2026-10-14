@@ -13,6 +13,7 @@ data class RingPlan(val ring: Boolean, val notify: Boolean)
  * screen nor [org.opencell.app.ui.CallActivity] make any sound themselves.
  * [answering] stops the ring immediately on an accepted ANSWER, even though
  * the call's phase itself doesn't leave INCOMING until CONNECTED arrives.
+ * [silent] ([org.opencell.core.phone.Call.silent]: waiting for CALL_CAPS, or being turned down for want of a codec, codec-negotiation spec §7.3) neither rings nor notifies.
  * Losing the link stops both, the same as answering, rejecting (which does
  * move the phase away from INCOMING immediately) or the call ending.
  *
@@ -23,7 +24,7 @@ data class RingPlan(val ring: Boolean, val notify: Boolean)
  * [mainInFront], so the notification stays posted while it's the one
  * showing the call.
  */
-fun ringPlan(phase: CallPhase?, answering: Boolean, linkUp: Boolean, mainInFront: Boolean): RingPlan {
-    val incoming = phase == CallPhase.INCOMING && !answering && linkUp
+fun ringPlan(phase: CallPhase?, answering: Boolean, linkUp: Boolean, mainInFront: Boolean, silent: Boolean = false): RingPlan {
+    val incoming = phase == CallPhase.INCOMING && !answering && !silent && linkUp
     return RingPlan(ring = incoming, notify = incoming && !mainInFront)
 }

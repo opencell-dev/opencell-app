@@ -131,7 +131,7 @@ class LinkService : LifecycleService() {
             combine(phone.state, graph.mainActivityInFront) { p, front -> Triple(p.call, p.linkUp, front) }
                 .distinctUntilChanged()
                 .collect { (call, linkUp, front) ->
-                    val plan = ringPlan(call?.phase, call?.answering == true, linkUp, front)
+                    val plan = ringPlan(call?.phase, call?.answering == true, linkUp, front, silent = call?.silent == true)
                     if (plan.ring) callRinger.start() else callRinger.stop()
                     if (plan.notify && call != null) callNotifier.showIncoming(call) else callNotifier.cancel()
                 }
@@ -185,7 +185,7 @@ class LinkService : LifecycleService() {
             is LinkState.Pairing -> "Pairing: enter the code shown on the terminal"
             is LinkState.PairingFailed -> "Pairing failed: open the app to retry"
             is LinkState.Connected -> {
-                val call = phone?.activeCall
+                val call = phone?.activeCall?.takeUnless { it.silent }
                 val sig = phone?.sig
                 when {
                     call != null -> call.phase.label + (call.peer?.let { " · " + PhoneSession.peerLabel(it, phone.number) } ?: "")

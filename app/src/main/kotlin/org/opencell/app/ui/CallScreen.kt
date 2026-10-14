@@ -99,7 +99,7 @@ fun CallScreen(
                 textAlign = TextAlign.Center,
             )
             if (call.phase == CallPhase.CONNECTED) {
-                call.connectedAt?.let { Text("Since ${clockTime(it)}", style = MaterialTheme.typography.bodyMedium) }
+                connectedLine(call)?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             }
             call.id?.let { Text("Call $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             val linkLost = !phone.linkUp && call.phase != CallPhase.ENDED
@@ -206,7 +206,7 @@ private fun VoiceControls(audio: CallAudio, devUnlocked: Boolean) {
                         OutlinedButton(onClick = { ask.launch(Manifest.permission.RECORD_AUDIO) }) { Text("Allow microphone") }
                     }
                     Text(
-                        CodecId.label(v.codec) + " · " + (route?.label ?: if (v.output) "no audio device" else "no audio output"),
+                        route?.label ?: if (v.output) "no audio device" else "no audio output",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (devUnlocked) {
@@ -227,6 +227,12 @@ private fun VoiceControls(audio: CallAudio, devUnlocked: Boolean) {
  * The line under Mute and Speaker: what the other side hears when it isn't the
  * microphone, and why. Second: whether it's a problem (shown as an error).
  */
+/** Under a connected call: since when, and the codec CONNECTED named (codec-negotiation spec §7.4). Null when neither is known. */
+internal fun connectedLine(call: Call): String? =
+    listOfNotNull(call.connectedAt?.let { "Since ${clockTime(it)}" }, call.codec?.let(CodecId::label))
+        .joinToString(" · ")
+        .ifEmpty { null }
+
 internal fun voiceNotice(v: VoiceState.On, granted: Boolean): Pair<String, Boolean>? = when {
     !granted -> "Microphone not allowed: the other side hears silence. If no question appears, " +
         "allow it in Settings > Apps > OpenCell > Permissions." to true

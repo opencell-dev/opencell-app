@@ -79,7 +79,8 @@ fun AppRoot(vm: MainViewModel) {
     // it isn't a platform AlertDialog).
     var showDeveloperDialog by rememberSaveable { mutableStateOf(false) }
     val unseen by vm.unseenMissed.collectAsStateWithLifecycle()
-    val inCall = phone.call != null
+    // A silent call (waiting for its codecs, or being turned down for want of one) isn't shown (codec-negotiation spec §7.3).
+    val inCall = phone.call?.silent == false
     var afterCall by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(inCall) {
         if (inCall) {

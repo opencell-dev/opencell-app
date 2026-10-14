@@ -10,8 +10,10 @@ interface and holds no secrets. The app:
 - places calls from a phone keypad, rings for incoming calls itself (a looping
   ringtone and vibration, whatever screen is showing), answers, rejects and hangs up;
 - keeps a call log on the phone (Recents), with a missed-call badge and notification;
-- carries voice in a connected call: Codec2 1200, three 40 ms frames in each
-  18-byte app data frame, with mute and speaker;
+- carries voice in a connected call, with mute and speaker, in the codec agreed for
+  that call: the best one both ends have (today Codec2 1200, three 40 ms frames in
+  each 18-byte app data frame). **⋮ > Voice codec** on the Phone tab limits what the
+  phone offers; a long press on Call (keypad or Recents) picks the codec for one call;
 - plays call progress tones itself (ringback, busy, reorder, SIT or number
   unobtainable), North American or UK;
 - shows and edits the terminal's scan list (**Channels** tab): where it is looking
@@ -25,6 +27,9 @@ The BLE contract (v4) is `firmware/components/oc_term/include/oc_term_gatt.h`.
 v4 adds the scan list: the SCAN characteristic, COMMAND 0x07 and 7 more STATUS bytes.
 Firmware older than v4 has no SCAN; the Channels tab then says to update it.
 Its Kotlin mirror is `core/src/main/kotlin/org/opencell/core/protocol/GattContract.kt`.
+Codec negotiation adds COMMAND 0x08 DIAL_CAPS and 0x09 ANSWER_CODEC, EVENT 0x0A
+CALL_CAPS and end cause 7, no shared voice codec. Against firmware from before it the
+app falls back to plain DIAL and ANSWER (Codec2 1200).
 A terminal still on v2-numbering firmware refuses v3 DIAL/ACTIVATE arguments and sends
 v2-length EVENTs; the app can't tell that from a genuinely bad argument or number, so it
 shows "Terminal firmware uses old numbers: update it" (or, on a refused command, the same
@@ -347,9 +352,11 @@ Voice (`core/.../voice/VoiceSession.kt`) runs while the call is CONNECTED and
 the link is up. It writes once per 120 ms block with `TerminalLink.writeUp` and
 drops a block on 0x80 instead of retrying, because a late voice frame is
 useless. Codec2 1200 packs three 40 ms frames into 18 bytes, one app data frame
-per radio frame. CONNECTED's codec byte picks the codec (1 = Codec2 1200, the
-only one any network sends); see the voice design spec in the opencell
-repository.
+per radio frame. Each call's codec is agreed when it is set up (the codec-negotiation
+spec in the opencell repository). The app offers the codecs it allows in DIAL_CAPS.
+A called phone answers with the best one in CALL_CAPS that it allows (a fixed ranking,
+`CodecId.RANKING`), or turns the call down with cause 7 without ringing when nothing
+is shared. CONNECTED's codec byte names the result, and the call screen shows it.
 
 ## Third-party notices
 

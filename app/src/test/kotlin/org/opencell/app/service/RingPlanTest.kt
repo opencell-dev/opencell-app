@@ -14,6 +14,15 @@ class RingPlanTest {
         )
     }
 
+    /** Codec-negotiation spec §7.3: a call waiting for its codecs, or being turned down for want of one, never rings. */
+    @Test
+    fun aSilentCallNeitherRingsNorNotifies() {
+        assertEquals(
+            RingPlan(ring = false, notify = false),
+            ringPlan(phase = CallPhase.INCOMING, answering = false, linkUp = true, mainInFront = false, silent = true),
+        )
+    }
+
     @Test
     fun mainActivityInFrontStillRingsButDoesNotNotify() {
         assertEquals(

@@ -8,6 +8,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,6 +23,7 @@ import org.opencell.app.service.CallNotifier
 import org.opencell.app.service.MissedCallNotifier
 import org.opencell.app.ui.MainActivity
 import org.opencell.app.ui.CallActivity
+import org.opencell.core.calllog.CallKind
 import org.opencell.core.link.LinkTarget
 import org.opencell.core.phone.Call
 import org.opencell.core.phone.CallPhase
@@ -30,6 +33,7 @@ import org.opencell.core.protocol.EndCause
 import org.opencell.core.protocol.QrParse
 import org.opencell.core.protocol.SigState
 import org.opencell.core.sim.SimulatedTerminal
+import org.opencell.core.voice.CodecId
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
 import java.time.Duration
@@ -62,6 +66,28 @@ class IncomingCallTest {
         waitFor("registered") { phone.state.value.sig == SigState.REGISTERED }
         assertTrue(app.graph.simulator.incomingCall(SimulatedTerminal.PEER))
         waitFor("ringing") { phone.state.value.call?.phase == CallPhase.INCOMING }
+    }
+
+    /** Review focus 4 (§7.3): a caller with no codec this phone allows: no ring, no call screen, a missed call with the reason. */
+    @Test
+    fun aCallerWithNoSharedCodecNeverRingsAndIsLoggedAsMissed() {
+        app.graph.callLog.clear()
+        app.graph.repository.connect(LinkTarget(SimulatedTerminal.ADDRESS, "Demo terminal"))
+        waitFor("not activated") { phone.state.value.linkUp && phone.state.value.sig == SigState.NOT_ACTIVATED }
+        phone.activate((ActivationQr.parse(app.graph.simulator.demoQrText()) as QrParse.Ok).qr)
+        waitFor("registered") { phone.state.value.sig == SigState.REGISTERED }
+        val rang = AtomicBoolean(false)
+        val watch = app.graph.scope.launch {
+            phone.state.collect { s -> if (s.call?.let { it.phase == CallPhase.INCOMING && !it.silent } == true) rang.set(true) }
+        }
+        assertTrue(app.graph.simulator.incomingCall(SimulatedTerminal.PEER, caps = CodecId.bit(CodecId.LPCNET_1733)))
+        waitFor("logged") { app.graph.callLog.entries.value.isNotEmpty() }
+        watch.cancel()
+        val e = app.graph.callLog.entries.value.single()
+        assertEquals(CallKind.MISSED, e.kind)
+        assertEquals(EndCause.NO_CODEC.code, e.causeCode)
+        assertNull(phone.state.value.call)
+        assertFalse(rang.get())
     }
 
     @Test
