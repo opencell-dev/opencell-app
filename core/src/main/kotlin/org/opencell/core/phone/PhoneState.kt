@@ -46,6 +46,11 @@ data class Call(
     val awaitingCaps: Boolean = false,
     /** The phone is turning this incoming call down, with no codec in common (ANSWER_CODEC 0): never rung or shown. */
     val declined: Boolean = false,
+    /**
+     * The voice codec this phone committed to for the call: the one it sent in ANSWER_CODEC, or, for an outgoing call,
+     * the only codec it allowed. Used when CONNECTED (and so [codec]) was missed, say across a reconnect.
+     */
+    val committedCodec: Int? = null,
 ) {
     val cause: EndCause? get() = causeCode?.let { EndCause.fromCode(it) }
 
@@ -151,11 +156,14 @@ sealed interface PhoneInput {
     /** The terminal accepted ACTIVATE for a code for [number]. */
     data class Activating(val number: String) : PhoneInput
 
-    /** The terminal accepted DIAL. */
-    data class Dialled(val number: String) : PhoneInput
+    /** The terminal accepted DIAL; [codec] is the one codec the phone allowed for it, if exactly one ([Call.committedCodec]). */
+    data class Dialled(val number: String, val codec: Int? = null) : PhoneInput
 
     /** The terminal accepted ANSWER. */
     data object Answering : PhoneInput
+
+    /** The terminal accepted ANSWER_CODEC [codec]: the codec this phone committed to for the ringing call ([Call.committedCodec]). */
+    data class Committed(val codec: Int) : PhoneInput
 
     /** [PhoneSession.CAPS_WAIT_MS] after INCOMING [callId] without CALL_CAPS (firmware from before negotiation): it may ring. */
     data class CapsWaitOver(val callId: Long) : PhoneInput
@@ -241,13 +249,15 @@ object PhoneReducer {
         is PhoneInput.Activating -> s.copy(sig = SigState.ACTIVATING, activation = Activation.InProgress(input.number), notice = null)
         is PhoneInput.Dialled -> s.copy(
             sig = SigState.CALLING,
-            call = Call(null, Direction.OUTGOING, input.number, CallPhase.CALLING),
+            call = Call(null, Direction.OUTGOING, input.number, CallPhase.CALLING, committedCodec = input.codec),
             callSerial = s.callSerial + 1,
             callChangedAt = now,
             notice = null,
         )
         PhoneInput.Answering -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING }
             ?.let { s.copy(call = it.copy(answering = true, awaitingCaps = false), callChangedAt = now) } ?: s
+        is PhoneInput.Committed -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING }
+            ?.let { s.copy(call = it.copy(committedCodec = input.codec)) } ?: s
         is PhoneInput.CapsWaitOver -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING && it.id == input.callId && it.awaitingCaps }
             ?.let { s.copy(call = it.copy(awaitingCaps = false)) } ?: s
         PhoneInput.Declining -> s.activeCall?.takeIf { it.phase == CallPhase.INCOMING }

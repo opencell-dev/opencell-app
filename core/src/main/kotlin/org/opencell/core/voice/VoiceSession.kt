@@ -174,7 +174,7 @@ class VoiceSession(
     private fun wanted(s: PhoneState): Want? {
         val c = s.call ?: return null
         if (!s.linkUp || c.phase != CallPhase.CONNECTED) return null
-        return Want(c.id, c.codec ?: CodecId.DEFAULT)
+        return Want(c.id, c.codec ?: c.committedCodec ?: CodecId.DEFAULT)
     }
 
     private fun start(codec: Int) {

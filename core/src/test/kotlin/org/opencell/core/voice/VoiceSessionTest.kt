@@ -197,6 +197,25 @@ class VoiceSessionTest {
         assertTrue(r.audio.mics.isEmpty())
     }
 
+    /** CONNECTED missed (a reconnect): the codec the phone committed to is used, not Codec2 on an OpenVoxNB call. */
+    @Test
+    fun aCallWithoutConnectedUsesTheCodecThePhoneCommittedTo() = runTest {
+        val r = rig(codecs = FakeCodecs(setOf(CodecId.OVX_1200)))
+        val c = inCall(codec = null).call!!
+        r.phone.value = inCall(codec = null).copy(call = c.copy(committedCodec = CodecId.OVX_1200))
+        runCurrent()
+        assertEquals(CodecId.OVX_1200, r.on.codec)
+    }
+
+    @Test
+    fun connectedsCodecBeatsTheCommittedOne() = runTest {
+        val r = rig(codecs = FakeCodecs(setOf(CodecId.OVX_1200)))
+        val c = inCall(codec = CodecId.OVX_1200).call!!
+        r.phone.value = inCall().copy(call = c.copy(committedCodec = CodecId.CODEC2_1200))
+        runCurrent()
+        assertEquals(CodecId.OVX_1200, r.on.codec)
+    }
+
     @Test
     fun aCallKnownOnlyFromStatusUsesCodec2x1200() = runTest {
         val r = rig()

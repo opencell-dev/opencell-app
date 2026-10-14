@@ -220,6 +220,8 @@ class PhoneSession(
         }
         val caps = allowedCaps(codec)
         val plainDial = CodecId.inCaps(caps, CodecId.CODEC2_1200)
+        // With one codec allowed, the call can only be using it (STATUS and CONNECTED are the other ways to know).
+        val only = CodecId.best(caps).takeIf { Integer.bitCount(caps) == 1 }
         if (noDialCaps) {
             if (!plainDial) return NO_CODEC_CHOICE
             command(Command.Dial(sent)) { apply(PhoneInput.Dialled(sent)) }
@@ -228,7 +230,7 @@ class PhoneSession(
         val dialCaps = Command.DialCaps(caps, sent)
         launchCommand(dialCaps) { r ->
             when (r) {
-                WriteResult.Accepted -> apply(PhoneInput.Dialled(sent))
+                WriteResult.Accepted -> apply(PhoneInput.Dialled(sent, only))
                 WriteResult.BadArgument -> { // an unknown command: firmware from before negotiation
                     noDialCaps = true
                     if (plainDial) {
@@ -259,7 +261,12 @@ class PhoneSession(
             ?: return command(Command.Answer) { apply(PhoneInput.Answering) }
         val codec = CodecChoice.answer(caps, allowedCaps())
         return command(Command.AnswerCodec(codec)) {
-            apply(if (codec == CodecId.NONE) PhoneInput.Declining else PhoneInput.Answering)
+            if (codec == CodecId.NONE) {
+                apply(PhoneInput.Declining)
+            } else {
+                apply(PhoneInput.Answering)
+                apply(PhoneInput.Committed(codec))
+            }
         }
     }
 

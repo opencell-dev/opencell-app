@@ -85,7 +85,7 @@ class PhoneSessionTest {
         assertNull(h.phone.dial("+883 1 606 555 0100"))
         runCurrent()
         assertEquals("08 01 2b 38 38 33 31 36 30 36 35 35 35 30 30 31 30 30", hex(h.link.commands.single()))
-        assertEquals(Call(null, Direction.OUTGOING, peer, CallPhase.CALLING), h.phone.state.value.call)
+        assertEquals(Call(null, Direction.OUTGOING, peer, CallPhase.CALLING, committedCodec = CodecId.CODEC2_1200), h.phone.state.value.call)
         assertTrue(h.log.contains("INFO COMMAND DIAL_CAPS 0x01 $peer: accepted"))
     }
 
@@ -753,5 +753,34 @@ class PhoneSessionTest {
         h.phone.answer()
         runCurrent()
         assertEquals("03", hex(h.link.commands.single()))
+    }
+
+    /** The codec the phone sent in ANSWER_CODEC is remembered for the call, in case CONNECTED is missed. */
+    @Test
+    fun answerRemembersTheCodecItCommittedTo() = runTest {
+        val h = harness(codecs = both)
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        h.link.emitEvent(TerminalEvent.CallCaps(7, 0x03))
+        runCurrent()
+        assertNull(h.phone.state.value.call!!.committedCodec)
+        h.phone.answer()
+        runCurrent()
+        assertEquals(CodecId.LPCNET_1733, h.phone.state.value.call!!.committedCodec)
+        h.link.emitEvent(TerminalEvent.Connected(7, CodecId.LPCNET_1733))
+        runCurrent()
+        assertEquals(CodecId.LPCNET_1733, h.phone.state.value.call!!.codec)
+    }
+
+    /** An outgoing call whose allowed caps hold exactly one codec can only be using it; with several, the phone can't know. */
+    @Test
+    fun dialRemembersTheCodecOnlyWhenItIsTheOnlyOneAllowed() = runTest {
+        val h = harness(codecs = both)
+        assertNull(h.phone.dial(peer))
+        runCurrent()
+        assertNull(h.phone.state.value.call!!.committedCodec)
+        val narrowed = harness(codecs = both)
+        assertNull(narrowed.phone.dial(peer, CodecPreference.Only(CodecId.LPCNET_1733)))
+        runCurrent()
+        assertEquals(CodecId.LPCNET_1733, narrowed.phone.state.value.call!!.committedCodec)
     }
 }
