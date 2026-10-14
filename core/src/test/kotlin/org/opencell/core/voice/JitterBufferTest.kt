@@ -7,14 +7,28 @@ import org.junit.Test
 class JitterBufferTest {
     private fun block(n: Int) = byteArrayOf(n.toByte())
 
-    /** "P3" for Play(block 3), "C3@0.5" for Conceal(block 3, 0.5), "S" for Silence. */
+    /** "P3" for Play(block 3), "C3@0.5" for Conceal(block 3, 0.5), "L" for Lost, "S" for Silence. */
     private fun Playout.label(): String = when (this) {
         is Playout.Play -> "P${payload[0]}"
         is Playout.Conceal -> "C${payload[0]}@$gain"
+        Playout.Lost -> "L"
         Playout.Silence -> "S"
     }
 
     private fun JitterBuffer.polls(n: Int) = List(n) { poll().label() }
+
+    /** OpenVoxNB spec V8: a codec that conceals gets the lost blocks themselves, not a quieter replay. */
+    @Test
+    fun aConcealingCodecGetsTheLostBlocksThemselves() {
+        val j = JitterBuffer(codecConceals = true)
+        j.offer(block(1), 0)
+        j.offer(block(2), 120)
+        assertEquals("P1", j.poll().label())
+        j.offer(block(4), 360) // block 3 (at 240) never came
+        assertEquals(listOf("P2", "L", "P4"), j.polls(3))
+        assertEquals(listOf("L", "L", "S"), j.polls(3)) // nothing more: two made up, then silence and a refill
+        assertEquals(3, j.counts().concealed)
+    }
 
     @Test
     fun waitsForTwoBlocksThenPlaysInOrder() {

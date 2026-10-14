@@ -44,6 +44,8 @@ data class VoiceStats(
     /** DOWN payloads of another size (a peer's test frames): ignored. */
     val notVoice: Int = 0,
     val jitter: JitterCounts = JitterCounts(),
+    /** The decoder's own counters, for a codec that keeps them (OpenVoxNB); null otherwise. */
+    val decoder: DecoderStats? = null,
 )
 
 sealed interface VoiceState {
@@ -95,7 +97,7 @@ sealed interface VoiceState {
  *   audio mode and route.
  * - **Downlink.** Payloads of the codec's size go into a [JitterBuffer]; the
  *   audio output's clock takes one block every 120 ms and plays it, conceals a
- *   missing one, or plays silence.
+ *   missing one (a quieter replay, or the codec's own concealment), or plays silence.
  *
  * The encoder and decoder are separate codec instances (one per direction),
  * made at the start of each call's voice and closed when it stops.
@@ -201,7 +203,7 @@ class VoiceSession(
         }
         muted = false
         _state.value = VoiceState.On(codec)
-        val jitter = JitterBuffer(jitterTarget)
+        val jitter = JitterBuffer(jitterTarget, codecConceals = down.concealsLoss)
         job = scope.launch {
             try {
                 coroutineScope {
@@ -336,9 +338,10 @@ class VoiceSession(
                 val pcm = when (val p = jitter.poll()) {
                     is Playout.Play -> codec.decode(p.payload)
                     is Playout.Conceal -> codec.decode(p.payload).also { scale(it, p.gain) }
+                    Playout.Lost -> codec.decode(null) // the codec's own concealment
                     Playout.Silence -> ShortArray(codec.blockSamples)
                 }
-                stats { it.copy(jitter = jitter.counts()) }
+                stats { it.copy(jitter = jitter.counts(), decoder = codec.decoderStats) }
                 val out = speaker
                 if (out == null) {
                     delay(BlockCodec.BLOCK_MILLIS)

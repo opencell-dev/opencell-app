@@ -8,6 +8,9 @@ sealed interface Playout {
     /** Nothing to play: the last good block again at [gain] (loss concealment). */
     class Conceal(val payload: ByteArray, val gain: Float) : Playout
 
+    /** Nothing to play, for a codec that conceals losses itself (OpenVoxNB): `BlockCodec.decode(null)`. */
+    data object Lost : Playout
+
     data object Silence : Playout
 }
 
@@ -32,8 +35,9 @@ data class JitterCounts(
  * most [maxConceal]; fewer if the speaker already concealed while it waited).
  *
  * - Playout starts, and restarts after running dry, once [target] blocks wait.
- * - Missing blocks are concealed by the last good block at -6 dB, then -12 dB;
- *   after [maxConceal] in a row the speaker is silent and the buffer refills.
+ * - Missing blocks are concealed by the last good block at -6 dB, then -12 dB, or,
+ *   for a codec that conceals itself ([codecConceals]: OpenVoxNB), handed to it as
+ *   [Playout.Lost]; after [maxConceal] in a row the speaker is silent and the buffer refills.
  * - More than [target] + 1 blocks waiting at a poll are trimmed back to [target]
  *   (a burst after a BLE stall must not become lasting delay); more than [max]
  *   on arrival drops the oldest.
@@ -45,6 +49,8 @@ class JitterBuffer(
     val max: Int = DEFAULT_MAX,
     val maxConceal: Int = DEFAULT_MAX_CONCEAL,
     private val blockMillis: Long = BlockCodec.BLOCK_MILLIS,
+    /** The codec makes up lost blocks itself (OpenVoxNB spec V8): [Playout.Lost] instead of a quieter replay. */
+    private val codecConceals: Boolean = false,
 ) {
     init {
         require(target in 1..max) { "target $target must be 1..$max" }
@@ -117,7 +123,7 @@ class JitterBuffer(
             return Playout.Silence
         }
         counts = counts.copy(concealed = counts.concealed + 1)
-        return Playout.Conceal(l, GAIN_STEP.pow(concealRun))
+        return if (codecConceals) Playout.Lost else Playout.Conceal(l, GAIN_STEP.pow(concealRun))
     }
 
     private fun Float.pow(n: Int): Float {

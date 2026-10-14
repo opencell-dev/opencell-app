@@ -12,6 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.opencell.core.fakes.FakeAudio
 import org.opencell.core.fakes.FakeCodec
+import org.opencell.core.fakes.FakeConcealingCodec
 import org.opencell.core.fakes.FakeCodecs
 import org.opencell.core.fakes.FakeLink
 import org.opencell.core.link.WriteResult
@@ -328,5 +329,32 @@ class VoiceSessionTest {
         r.phone.value = inCall()
         runCurrent()
         assertEquals(listOf("speaker", "mic"), r.audio.opened)
+    }
+
+    /** An 18-byte OpenVoxNB-shaped block whose samples are all [v] (what FakeConcealingCodec makes of it). */
+    private fun ovx(v: Int) = ByteArray(18).also {
+        it[0] = (v shr 8).toByte()
+        it[1] = v.toByte()
+    }
+
+    /** Review focus 5: a codec that conceals (OpenVoxNB) makes up the lost blocks itself, and its counters show. */
+    @Test
+    fun aConcealingCodecMakesUpLostBlocksItself() = runTest {
+        val r = rig(codecs = FakeCodecs(setOf(CodecId.OVX_1200)))
+        r.phone.value = inCall(codec = CodecId.OVX_1200)
+        runCurrent()
+        val speaker = r.audio.speakers.single()
+        r.link.emitDown(ovx(200))
+        advanceTimeBy(120)
+        r.link.emitDown(ovx(201))
+        advanceTimeBy(240) // the block due at 240 ms never comes
+        r.link.emitDown(ovx(203))
+        advanceTimeBy(600)
+        val lost = FakeConcealingCodec.LOST.toInt()
+        val heard = speaker.firstSamples.dropWhile { it == 0 }
+        assertEquals(listOf(200, 201, lost, 203, lost, lost), heard.take(6))
+        assertEquals(3, r.codecs.concealing.sumOf { it.lost })
+        assertEquals(3, r.on.stats.jitter.concealed)
+        assertEquals(DecoderStats(concealedFrames = 18), r.on.stats.decoder)
     }
 }
