@@ -158,6 +158,7 @@ fun AppRoot(vm: MainViewModel) {
             onUnlock = vm::unlockDeveloper,
             onLock = vm::lockDeveloper,
             onDismiss = { showDeveloperDialog = false },
+            about = openVoxAbout(),
         )
     }
 }

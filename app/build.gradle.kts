@@ -13,7 +13,7 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "0.2.0"
-        // Only the ABIs :codec2 builds (the phones and the emulator). AndroidX/CameraX also
+        // Only the ABIs :codec2 and :openvox build (the phones and the emulator). AndroidX/CameraX also
         // ship 32-bit libraries; without this a 32-bit device would install the app and then
         // have no codec at the first call.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
@@ -42,9 +42,14 @@ android {
                 // Robolectric pokes FileDescriptor internals on JDK 17+.
                 it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
                 it.jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED")
-                // The app graph uses the real Codec2: the host build of :codec2's native code.
-                it.dependsOn(":codec2:hostCodec2")
-                it.systemProperty("java.library.path", rootProject.layout.projectDirectory.dir("codec2/build/host-codec2").asFile.path)
+                // The app graph uses the real codecs: the host builds of :codec2's and :openvox's native code.
+                it.dependsOn(":codec2:hostCodec2", ":openvox:hostOpenVox")
+                it.systemProperty(
+                    "java.library.path",
+                    // File is java.io.File (a default import); `java.io.File` would resolve `java` to the java extension.
+                    listOf("codec2/build/host-codec2", "openvox/build/host-openvox")
+                        .joinToString(File.pathSeparator) { dir -> rootProject.layout.projectDirectory.dir(dir).asFile.path },
+                )
             }
         }
     }
@@ -63,6 +68,7 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation(project(":codec2"))
+    implementation(project(":openvox"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

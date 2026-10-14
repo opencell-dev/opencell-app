@@ -8,6 +8,9 @@ import org.opencell.core.phone.Call
 import org.opencell.core.phone.CallPhase
 import org.opencell.core.phone.Direction
 import org.opencell.core.voice.CodecId
+import org.opencell.core.voice.DecoderStats
+import org.opencell.core.voice.JitterCounts
+import org.opencell.core.voice.VoiceStats
 import org.opencell.core.voice.VoiceState
 
 /** Plain JVM: the call screen's line about the microphone and the audio devices. */
@@ -39,5 +42,16 @@ class VoiceNoticeTest {
         assertTrue(connectedLine(call)!!.matches(Regex("Since .+ · Codec2 1200")))
         assertEquals("Codec2 1200", connectedLine(call.copy(connectedAt = null)))
         assertNull(connectedLine(call.copy(connectedAt = null, codec = null)))
+    }
+
+    /** Ruling R5: the developer line adds a concealing decoder's own counters. */
+    @Test
+    fun theDeveloperLineAddsTheDecodersCounters() {
+        val s = VoiceStats(sent = 5, dropped = 1, received = 4, jitter = JitterCounts(concealed = 2))
+        assertEquals("Sent 5 · not sent 1 · received 4 · concealed 2", voiceStatsLine(s))
+        assertEquals(
+            "Sent 5 · not sent 1 · received 4 · concealed 2 · decoder lost 3 · toggle gaps 1 · FEC fixed 7 · FEC failed 2",
+            voiceStatsLine(s.copy(decoder = DecoderStats(lostBlocks = 3, toggleGaps = 1, golayFixed = 4, hammingFixed = 3, golayFailed = 1, crcFailed = 1))),
+        )
     }
 }

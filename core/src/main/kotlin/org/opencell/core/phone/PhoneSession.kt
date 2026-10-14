@@ -164,6 +164,8 @@ class PhoneSession(
                 when (input) {
                     is LinkInput.Event -> {
                         log(ConsoleKind.INFO, "EVENT ${input.event.label}")
+                        // Before the event: its CALL_CAPS would end the silent wait, and the call would show as ringing until turned down.
+                        beforeEvent(input.event)
                         apply(PhoneInput.Event(input.event))
                         afterEvent(input.event)
                     }
@@ -352,17 +354,17 @@ class PhoneSession(
         if (r == WriteResult.NotNow) rereadStatus()
     }
 
-    /** What the phone does by itself after an EVENT (§7.3): wait for an INCOMING's CALL_CAPS, or turn the call down. */
+    /** A CALL_CAPS with no codec both ends allow turns the call down before the event is applied, so it never shows as ringing (§7.3). */
+    private fun beforeEvent(e: TerminalEvent) {
+        if (e !is TerminalEvent.CallCaps) return
+        val c = _state.value.activeCall ?: return
+        if (c.phase != CallPhase.INCOMING || c.id != e.callId || c.answering || c.declined) return
+        if (CodecChoice.answer(e.caps, allowedCaps()) == CodecId.NONE) decline()
+    }
+
+    /** What the phone does by itself after an EVENT (§7.3): wait for an INCOMING's CALL_CAPS. */
     private fun afterEvent(e: TerminalEvent) {
-        when (e) {
-            is TerminalEvent.Incoming -> waitForCaps(e.callId)
-            is TerminalEvent.CallCaps -> {
-                val c = _state.value.activeCall ?: return
-                if (c.phase != CallPhase.INCOMING || c.id != e.callId || c.answering || c.declined) return
-                if (CodecChoice.answer(e.caps, allowedCaps()) == CodecId.NONE) decline()
-            }
-            else -> Unit
-        }
+        if (e is TerminalEvent.Incoming) waitForCaps(e.callId)
     }
 
     /** Lets INCOMING [callId] ring after [CAPS_WAIT_MS] if no CALL_CAPS has come (firmware from before negotiation). */

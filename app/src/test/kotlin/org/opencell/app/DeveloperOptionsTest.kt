@@ -7,11 +7,13 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.ui.MainActivity
+import org.opencell.app.ui.openVoxAbout
 import org.opencell.core.dev.DeveloperAccess
 import org.robolectric.annotation.Config
 
@@ -103,5 +105,19 @@ class DeveloperOptionsTest {
         compose.onNodeWithText("Lock").performClick()
         compose.onNodeWithText("Console").assertDoesNotExist()
         compose.onNodeWithText("Demo terminal").assertDoesNotExist()
+    }
+
+    /** OpenVoxNB spec V4: Developer options say which oc_vox this build carries. */
+    @Test
+    fun unlockedShowsTheOpenVoxNbBuild() {
+        assertEquals(
+            "OpenVoxNB bitstream version 0 (experimental), oc_vox ebc911751b",
+            openVoxAbout(0, "ebc911751bfdca07e87e4bce6d4c71852f75488b"),
+        )
+        assertEquals("OpenVoxNB bitstream version 1, oc_vox 0123456789", openVoxAbout(1, "0123456789abcdef"))
+        openDialog()
+        enterCodeAndUnlock(DeveloperAccess.CODE)
+        openDeveloperOptionsMenu()
+        compose.onNodeWithText(openVoxAbout()).assertExists()
     }
 }

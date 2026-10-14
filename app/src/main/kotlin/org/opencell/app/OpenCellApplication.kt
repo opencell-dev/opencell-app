@@ -22,6 +22,7 @@ import org.opencell.app.data.PrefsPhoneMemory
 import org.opencell.app.data.TerminalRepository
 import org.opencell.app.service.MissedCallNotifier
 import org.opencell.codec2.Codec2
+import org.opencell.openvox.OpenVox
 import org.opencell.core.calllog.CallLog
 import org.opencell.core.link.Connector
 import org.opencell.core.session.TerminalSession
@@ -55,8 +56,8 @@ class AppGraph(
     private val micAllowed = MutableStateFlow(false)
     val tonePlan = TonePlanSetting(prefs)
 
-    /** The voice codecs this build runs. */
-    private val voiceCodecs: VoiceCodecFactory = Codec2
+    /** The voice codecs this build runs: Codec2 1200 and OpenVoxNB (ids 3-6, experimental while its bitstream isn't frozen). */
+    private val voiceCodecs: VoiceCodecFactory = VoiceCodecFactory.of(Codec2, OpenVox)
 
     /** Which of them calls offer and accept: Automatic or one (codec-negotiation spec §7.1). */
     val voiceCodec = VoiceCodecSetting(prefs, voiceCodecs.codecs)

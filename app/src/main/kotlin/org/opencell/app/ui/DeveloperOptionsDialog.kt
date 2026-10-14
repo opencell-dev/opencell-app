@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import org.opencell.openvox.OpenVoxVendor
 
 /**
  * ⋮ > Developer options (Terminal tab). Locked: a numeric code field: a wrong
@@ -46,7 +47,14 @@ import androidx.compose.ui.unit.dp
  * `Surface` gets the same look without a second window.
  */
 @Composable
-fun DeveloperOptionsDialog(unlocked: Boolean, onUnlock: (String) -> Boolean, onLock: () -> Unit, onDismiss: () -> Unit) {
+fun DeveloperOptionsDialog(
+    unlocked: Boolean,
+    onUnlock: (String) -> Boolean,
+    onLock: () -> Unit,
+    onDismiss: () -> Unit,
+    /** A line about this build shown once unlocked ([openVoxAbout]). */
+    about: String? = null,
+) {
     BackHandler(onBack = onDismiss)
     Box(
         Modifier
@@ -65,16 +73,17 @@ fun DeveloperOptionsDialog(unlocked: Boolean, onUnlock: (String) -> Boolean, onL
             tonalElevation = 6.dp,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
-            if (unlocked) UnlockedContent(onLock, onDismiss) else LockedContent(onUnlock, onDismiss)
+            if (unlocked) UnlockedContent(onLock, onDismiss, about) else LockedContent(onUnlock, onDismiss)
         }
     }
 }
 
 @Composable
-private fun UnlockedContent(onLock: () -> Unit, onDismiss: () -> Unit) {
+private fun UnlockedContent(onLock: () -> Unit, onDismiss: () -> Unit, about: String?) {
     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Developer options", style = MaterialTheme.typography.headlineSmall)
         Text("Console, Loopback, the demo terminal and the call screen's voice stats line are unlocked on this phone.")
+        about?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = onDismiss) { Text("Close") }
             TextButton(onClick = { onLock(); onDismiss() }) { Text("Lock") }
@@ -114,3 +123,10 @@ private fun LockedContent(onUnlock: (String) -> Boolean, onDismiss: () -> Unit) 
         }
     }
 }
+
+/**
+ * Developer options' line about the OpenVoxNB in this build (OpenVoxNB spec V4): its
+ * bitstream version (OC_VOX_VERSION; 0 is experimental) and the oc_vox commit vendored.
+ */
+fun openVoxAbout(version: Int = OpenVoxVendor.VERSION, commit: String = OpenVoxVendor.COMMIT): String =
+    "OpenVoxNB bitstream version $version" + (if (version == 0) " (experimental)" else "") + ", oc_vox ${commit.take(10)}"

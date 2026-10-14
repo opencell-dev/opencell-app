@@ -11,8 +11,9 @@ interface and holds no secrets. The app:
   ringtone and vibration, whatever screen is showing), answers, rejects and hangs up;
 - keeps a call log on the phone (Recents), with a missed-call badge and notification;
 - carries voice in a connected call, with mute and speaker, in the codec agreed for
-  that call: the best one both ends have (today Codec2 1200, three 40 ms frames in
-  each 18-byte app data frame). **⋮ > Voice codec** on the Phone tab limits what the
+  that call: the best one both ends have (Codec2 1200, three 40 ms frames in each
+  18-byte app data frame; or OpenVoxNB, one 9-18-byte block per frame, which while its
+  bitstream is experimental only goes out when chosen). **⋮ > Voice codec** on the Phone tab limits what the
   phone offers; a long press on Call (keypad or Recents) picks the codec for one call;
 - plays call progress tones itself (ringback, busy, reorder, SIT or number
   unobtainable), North American or UK;
@@ -40,7 +41,7 @@ explanation folded into the refusal reason) rather than guessing.
 Needs JDK 17 or newer and the Android SDK with platform `android-37`
 (current AndroidX needs compileSdk 37; the app targets 36), NDK
 `27.2.12479018` and CMake `3.22.1` (`sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"`)
-for the Codec2 library, and a host C compiler for the unit tests (they load a
+for the Codec2 and OpenVoxNB libraries, and a host C compiler for the unit tests (they load a
 host build of the same C code):
 
 ```sh
@@ -310,8 +311,9 @@ Lock** turns them off again.
   calllog/   CallLog (entries, cap, unseen missed), CallLogCodec (text form),
              CallLogDisplay (Recents' wording and day groups)
   voice/     VoiceSession  (uplink paced by the microphone, drop on 0x80; downlink
-             JitterBuffer with concealment), BlockCodec (3 codec frames per app
-             data frame), VoiceCodec/CodecId, AudioIo; CallTonePlayer (toneFor),
+             JitterBuffer: a lost block replayed quieter, or the codec's own
+             concealment), BlockCodec (960 / frameSamples codec frames per app
+             data frame), VoiceCodec/CodecId/CodecChoice, AudioIo; CallTonePlayer (toneFor),
              ToneGenerator, TonePlans (North American, UK), DtmfTones (key tones)
   loopback/  LoopbackRunner, LoopbackStats
   session/   TerminalSession (link + sender + phone + console + loopback + channels),
@@ -321,6 +323,9 @@ Lock** turns them off again.
 :codec2 (Android library)
              Codec2 (VoiceCodec over JNI), libcodec2.so (vendored by
              tools/codec2/vendor.sh), libopencell_codec2.so (the JNI glue)
+:openvox (Android library)
+             OpenVox (VoiceCodec over JNI, codec ids 3-6), libopencell_openvox.so
+             (oc_vox vendored by tools/openvox/vendor.sh, with its JNI glue)
 :app   (Android)
   audio/     AndroidAudio (AudioRecord/AudioTrack, 8 kHz), CallAudioRoute (mode,
              focus, earpiece/speaker/headset), CallAudio, TonePlanSetting,
@@ -373,3 +378,10 @@ upstream commit `310777b1c6f1af0bc7c72f5b32f80f6fd9136962`; it is built as its
 own shared library, `libcodec2.so`, which can be replaced with a modified build.
 Every APK carries the licence and a notice in its assets (`licenses/codec2/COPYING`,
 `licenses/codec2/NOTICE`, written by the same script).
+
+OpenVoxNB (`oc_vox`) is OpenCell's own speech codec, Apache-2.0 like the rest of
+OpenCell. `tools/openvox/vendor.sh` takes its production (fixed-point) sources from
+opencell-firmware at a pinned commit (`openvox/src/main/cpp/oc_vox/README.opencell`).
+The core must build the same commit, so move both pins together. Until its bitstream
+freezes (`OC_VOX_VERSION` 1) it is experimental: Automatic never offers it, and only
+"Only OpenVoxNB …" or "Call with…" do. Developer options show the version and commit.

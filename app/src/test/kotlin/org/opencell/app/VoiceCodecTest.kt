@@ -71,4 +71,22 @@ class VoiceCodecTest {
         assertEquals(CodecPreference.Only(CodecId.CODEC2_1200), compose.activity.graph.voiceCodec.choice.value)
         assertEquals(0x01, compose.activity.graph.session.phone.allowedCaps())
     }
+
+    /** OpenVoxNB spec V3: the dialog lists OpenVoxNB, labelled experimental, and Automatic still leaves it out. */
+    @Test
+    fun theDialogLabelsOpenVoxNbAsExperimental() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Voice codec").performClick()
+        compose.onNodeWithText("Only Codec2 1200").assertExists()
+        compose.onNodeWithText("Only OpenVoxNB 600 (experimental)").assertExists()
+        compose.onNodeWithText("Only OpenVoxNB 1200 (experimental)").performClick()
+        compose.onNodeWithText("Done").performClick()
+        val graph = compose.activity.graph
+        assertEquals(CodecPreference.Only(CodecId.OVX_1200), graph.voiceCodec.choice.value)
+        assertEquals(0x20, graph.session.phone.allowedCaps())
+        graph.voiceCodec.set(CodecPreference.Automatic)
+        assertEquals(0x01, graph.session.phone.allowedCaps()) // experimental: not in Automatic
+    }
 }

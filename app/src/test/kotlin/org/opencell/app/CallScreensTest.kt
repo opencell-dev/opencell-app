@@ -12,6 +12,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
@@ -216,5 +218,24 @@ class CallScreensTest {
         compose.activityRule.scenario.recreate()
         compose.waitForHome()
         compose.onNodeWithTag(NUMBER_TAG).assertTextEquals("606-555")
+    }
+
+    /** OpenVoxNB spec §5: an OVX-1200 call through the demo terminal, chosen with "Call with…" (not in Automatic yet), on the real codec. */
+    @Test
+    fun callWithOpenVoxNbRunsTheRealCodec() {
+        compose.connectDemoAndOpenPhone()
+        compose.activateDemo()
+        compose.typeOnKeypad("6065550100")
+        compose.onNodeWithContentDescription("Call").performTouchInput { longClick() }
+        compose.onNodeWithText("OpenVoxNB 1200 (experimental)").performClick()
+        compose.waitForText("Connected")
+        compose.waitForText("OpenVoxNB 1200")
+        // The demo peer echoes the 18-byte blocks; the decoder's counters show behind Developer options.
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(textMatches(Regex("received [1-9].*decoder lost"))).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Hang up").performClick()
+        compose.waitForText("Call ended")
+        compose.onNodeWithText("Close").performClick()
     }
 }

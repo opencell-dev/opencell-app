@@ -1,6 +1,8 @@
 package org.opencell.core.phone
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -702,6 +704,22 @@ class PhoneSessionTest {
         assertNull(f.connectedAt)
         assertFalse(f.rejected)
         assertTrue(h.log.contains("INFO No shared voice codec: turning the call down"))
+    }
+
+    /** Ruling R3: no state a collector can observe has the call ringing before it is turned down (an app ringer reads every state). */
+    @Test
+    fun noSharedCodecNeverShowsTheCallAsRingingInBetween() = runTest {
+        val h = harness()
+        val seen = mutableListOf<Call>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            h.phone.state.collect { s -> s.call?.let { seen += it } }
+        }
+        h.link.emitEvent(TerminalEvent.Incoming(7, peer))
+        h.link.emitEvent(TerminalEvent.CallCaps(7, CodecId.bit(CodecId.LPCNET_1733)))
+        runCurrent()
+        assertTrue(seen.isNotEmpty())
+        assertTrue(seen.toString(), seen.all { it.silent })
+        assertTrue(seen.last().declined)
     }
 
     /** Ruling R8: the setting at the moment of Answer counts; narrowed to nothing in common, the call is turned down. */

@@ -47,6 +47,7 @@ import org.opencell.core.phone.Direction
 import org.opencell.core.phone.PhoneSession
 import org.opencell.core.voice.CodecId
 import org.opencell.core.voice.VoiceState
+import org.opencell.core.voice.VoiceStats
 
 /**
  * Outgoing, incoming, in-call and ended screens, shown full-screen over the app
@@ -209,14 +210,7 @@ private fun VoiceControls(audio: CallAudio, devUnlocked: Boolean) {
                         route?.label ?: if (v.output) "no audio device" else "no audio output",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    if (devUnlocked) {
-                        val s = v.stats
-                        Text(
-                            "Sent ${s.sent} · not sent ${s.dropped + s.late + s.failed} · received ${s.received} · " +
-                                "concealed ${s.jitter.concealed}",
-                            style = MonoStyle,
-                        )
-                    }
+                    if (devUnlocked) Text(voiceStatsLine(v.stats), style = MonoStyle)
                 }
             }
         }
@@ -232,6 +226,14 @@ internal fun connectedLine(call: Call): String? =
     listOfNotNull(call.connectedAt?.let { "Since ${clockTime(it)}" }, call.codec?.let(CodecId::label))
         .joinToString(" · ")
         .ifEmpty { null }
+
+/** The developer-only line under a call's audio: the voice counters, then a concealing decoder's own (OpenVoxNB, ruling R5). */
+internal fun voiceStatsLine(s: VoiceStats): String {
+    val counters = "Sent ${s.sent} · not sent ${s.dropped + s.late + s.failed} · received ${s.received} · concealed ${s.jitter.concealed}"
+    val d = s.decoder ?: return counters
+    return "$counters · decoder lost ${d.lostBlocks} · toggle gaps ${d.toggleGaps} · " +
+        "FEC fixed ${d.golayFixed + d.hammingFixed} · FEC failed ${d.golayFailed + d.crcFailed}"
+}
 
 internal fun voiceNotice(v: VoiceState.On, granted: Boolean): Pair<String, Boolean>? = when {
     !granted -> "Microphone not allowed: the other side hears silence. If no question appears, " +
