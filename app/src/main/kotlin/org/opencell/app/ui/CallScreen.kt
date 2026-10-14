@@ -71,7 +71,8 @@ fun CallScreen(
 ) {
     val phone by session.state.collectAsStateWithLifecycle()
     val linkState by link.collectAsStateWithLifecycle()
-    val call = phone.call ?: return
+    // A silent call (waiting for its codecs, or being turned down for want of one) isn't shown, as in AppRoot (codec-negotiation spec §7.3).
+    val call = phone.call?.takeUnless { it.silent } ?: return
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(
             Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),

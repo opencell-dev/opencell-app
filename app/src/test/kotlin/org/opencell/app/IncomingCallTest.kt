@@ -4,6 +4,9 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
 import android.os.Looper
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -16,6 +19,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.opencell.app.service.CallActionReceiver
@@ -44,6 +48,9 @@ class IncomingCallTest {
     private val app: OpenCellApplication get() = ApplicationProvider.getApplicationContext()
     private val phone get() = app.graph.session.phone
     private val nm get() = app.getSystemService(NotificationManager::class.java)
+
+    @get:Rule
+    val compose = createEmptyComposeRule()
 
     @After
     fun tearDown() {
@@ -230,6 +237,25 @@ class IncomingCallTest {
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(4))
         assertFalse(activity.isFinishing)
         assertEquals(CallPhase.INCOMING, phone.state.value.call?.phase)
+        controller.pause().stop().destroy()
+    }
+
+    /** A call that arrives during CallActivity's "Call ended" window but is silent (turned down for want of a codec) is not shown, not even for a moment. */
+    @Test
+    fun aSilentCallArrivingDuringTheEndedWindowIsNotShown() {
+        ringingDemoCall()
+        val controller = Robolectric.buildActivity(CallActivity::class.java, Intent(app, CallActivity::class.java)).setup()
+        phone.reject()
+        waitForMain("ended") { phone.state.value.call?.phase == CallPhase.ENDED }
+        val first = phone.state.value.call?.id
+        assertTrue(app.graph.simulator.incomingCall(SimulatedTerminal.PEER, caps = CodecId.bit(CodecId.LPCNET_1733)))
+        waitForMain("the next call") { phone.state.value.call?.id.let { it != null && it != first } }
+        assertTrue(phone.state.value.call!!.silent) // waiting for its caps, or turned down: never ringing
+        waitForMain("turned down") { phone.state.value.call?.declined == true }
+        compose.waitForIdle()
+        compose.onAllNodesWithText("Incoming call").assertCountEquals(0)
+        compose.onAllNodesWithText("Answer").assertCountEquals(0)
+        compose.onAllNodesWithText("No shared voice codec").assertCountEquals(0)
         controller.pause().stop().destroy()
     }
 
